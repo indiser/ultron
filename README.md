@@ -59,6 +59,9 @@ Tools are dynamically registered into the LLM's tool schema at runtime.
 **Persona** (`Main_Prompt.txt`)
 A 14-section system prompt defining identity, voice, humor rules, safety floor, security robustness, and output format. The persona is a costume. Competence is not optional.
 
+**Speech Input (external)**
+Ultron has no built-in STT. Voice input is currently handled by [Wispr Flow](https://wisprflow.ai), which transcribes speech system-wide and types the result into the terminal. It works, but it phones home. The planned replacement is [Handy](https://github.com/handyai/handy) — a fully offline STT tool with the same system-wide injection behaviour, keeping the entire pipeline air-gapped.
+
 ---
 
 ## Setup
@@ -73,8 +76,8 @@ A 14-section system prompt defining identity, voice, humor rules, safety floor, 
 ### Install
 
 ```bash
-git clone <repo>
-cd Ultron
+git clone https://github.com/indiser/ultron
+cd ultron
 uv sync
 ```
 
@@ -151,7 +154,7 @@ This is version 0.1.0. It is a proof of concept, not a production system.
 - **Multi-agent** — spawn sub-agents for parallelizable research tasks instead of sequential tool calls
 - **Persistent sessions** — save and restore full conversation history across restarts
 - **Wake word** — always-on microphone with a wake word to trigger the agent without typing
-- **Voice input** — STT pipeline to complement the TTS output, making it fully voice-driven
+- **Voice input** — replace Wispr Flow with [Handy](https://github.com/handyai/handy) for fully offline, privacy-preserving STT; no audio leaves the machine
 - **Plugin system** — hot-loadable tool modules without restarting the agent
 - **Emotion-aware TTS** — use the emotion vector API (already partially explored in `voice.py`) to modulate tone based on response content
 
