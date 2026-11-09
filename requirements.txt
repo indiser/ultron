@@ -12,3 +12,4 @@ python-dotenv
 requests
 soundfile
 sounddevice
+pocket-tts
