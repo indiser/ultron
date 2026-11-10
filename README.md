@@ -47,7 +47,7 @@ The most technically interesting piece. For deep queries, it:
 Dual-mode: uses a remote OpenAI-compatible embedding endpoint if `EMBED_BASE_URL` is set, otherwise falls back to a local `sentence-transformers` model. Zero code change required to switch.
 
 **Voice Pipeline** (`voice_out.py`)
-Fully async, two-thread pipeline. A synthesis thread calls a remote TTS endpoint (voice-cloned from a reference `.mp3`), and a playback thread streams audio via `sounddevice`. Sentences are split and queued as the LLM streams, so speech begins before the full response is generated. Supports disk caching for repeated phrases and instant cancellation when the user starts a new turn.
+Fully async, two-thread pipeline powered by [PocketTTS](https://github.com/pocket-tts/pocket-tts) — a local, offline TTS model. At startup, the model loads a `.safetensors` voice state file cloned from a reference audio clip. A synthesis thread streams audio chunks via `generate_audio_stream`, and a playback thread writes them directly to a `sounddevice` output stream. Sentences are split and queued as the LLM responds, so speech begins before the full response is generated. No network calls, no API keys, no remote endpoints — the entire voice pipeline runs on-device.
 
 **MCP Integration** (`mcp_client.py`)
 Connects to two MCP servers at startup via stdio:
@@ -71,8 +71,6 @@ Ultron has no built-in STT. Voice input is currently handled by [Wispr Flow](htt
 - [`uv`](https://github.com/astral-sh/uv) package manager
 - A running LLM backend with an OpenAI-compatible API (e.g. vLLM, Ollama, LM Studio)
 - *(Optional)* A remote embedding endpoint
-- *(Optional)* A remote TTS endpoint with voice cloning support
-
 ### Install
 
 ```bash
@@ -92,18 +90,8 @@ BRAIN_LLM_BASE_URL=<openai-compatible-base-url>
 # Optional: remote embeddings (falls back to local sentence-transformers)
 EMBED_BASE_URL=<embedding-endpoint>
 
-# Optional: TTS voice cloning
-TTS_URL=<tts-endpoint>
-TTS_KEY=<tts-api-key>
-TTS_VOICE=me
-TTS_LANG=en
-TTS_REF=<path-to-reference-voice.mp3>
-```
-
-### Upload Voice (first run, if using TTS)
-
-```bash
-uv run voice_out.py upload ultron_best_vo.mp3
+# TTS: path to your voice state file (generated from a reference audio clip)
+TTS_STATE=<path-to-voice.safetensors>
 ```
 
 ### Run
@@ -134,7 +122,7 @@ uv run main.py
 
 This is version 0.1.0. It is a proof of concept, not a production system.
 
-- The LLM backend, embedding server, and TTS endpoint are all expected to be externally hosted (e.g. on a Colab instance tunneled via Cloudflare). They are ephemeral and will go down.
+- The LLM backend and embedding server are expected to be externally hosted (e.g. on a Colab instance tunneled via Cloudflare). They are ephemeral and will go down. The TTS pipeline is fully local and offline.
 - There is no GUI. It is a terminal loop.
 - Memory is a flat markdown file. There is no vector store, no retrieval, no forgetting.
 - The workspace is a single flat directory with no permissions model beyond a path check.
@@ -163,7 +151,7 @@ This is version 0.1.0. It is a proof of concept, not a production system.
 ## Dependencies
 
 Core: `openai`, `mcp`, `ddgs`, `scrapling`, `sentence-transformers`, `numpy`, `python-dotenv`
-Audio: `sounddevice`, `soundfile`, `requests`
+Audio: `sounddevice`, `pocket-tts`, `torch`
 Runtime: `uv` (Python 3.14+)
 
 ---

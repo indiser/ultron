@@ -9,7 +9,29 @@ import traceback
 MAX_STEPS = 20
 RESULT_CAP = 3500
 
-def trim_history(messages: list, max_chars: int = 16000) -> None:
+# def trim_history(messages: list, max_chars: int = 16000) -> None:
+#     if sum(len(str(m)) for m in messages) <= max_chars:
+#         return
+#     tool_idx = [i for i, m in enumerate(messages)
+#                 if isinstance(m, dict) and m.get("role") == "tool"]
+#     for i in tool_idx[:-2]:
+#         c = messages[i]["content"]
+#         if len(c) > 300:
+#             messages[i]["content"] = c[:300] + " [old result trimmed]"
+
+# def drop_old_turns(messages: list, max_chars: int = 16000) -> None:
+#     while sum(len(str(m)) for m in messages) > max_chars:
+#         user_idx = [i for i, m in enumerate(messages)
+#                     if isinstance(m, dict) and m.get("role") == "user"]
+#         if len(user_idx) < 3:
+#             return
+#         del messages[user_idx[0]:user_idx[1]]
+
+def budget(messages: list, extra: int = 16000) -> int:
+    return len(str(messages[0])) + extra
+
+def trim_history(messages: list, max_chars: int | None = None) -> None:
+    max_chars = max_chars or budget(messages)
     if sum(len(str(m)) for m in messages) <= max_chars:
         return
     tool_idx = [i for i, m in enumerate(messages)
@@ -19,7 +41,8 @@ def trim_history(messages: list, max_chars: int = 16000) -> None:
         if len(c) > 300:
             messages[i]["content"] = c[:300] + " [old result trimmed]"
 
-def drop_old_turns(messages: list, max_chars: int = 16000) -> None:
+def drop_old_turns(messages: list, max_chars: int | None = None) -> None:
+    max_chars = max_chars or budget(messages)
     while sum(len(str(m)) for m in messages) > max_chars:
         user_idx = [i for i, m in enumerate(messages)
                     if isinstance(m, dict) and m.get("role") == "user"]

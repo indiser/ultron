@@ -2,7 +2,7 @@ from contextlib import AsyncExitStack
 import os
 from datetime import date
 from mem_tools import load_memory
-from SYSTEM_PROMPT import SYSTEM_PROMPT
+from SYSTEM_PROMPT import build_prompt
 from agent import run_agent
 from mcp_client import connect_mcp
 import asyncio
@@ -12,8 +12,9 @@ async def main():
     async with AsyncExitStack() as stack:
         await connect_mcp(stack)
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT.format(
-                memory=load_memory(), today=date.today().isoformat(),
+            {"role": "system", "content": build_prompt(
+                memory=load_memory(),
+                today=date.today().isoformat(),
                 shell="Windows cmd.exe" if os.name == "nt" else "bash")}
         ]
         print("\nOffline Code")
