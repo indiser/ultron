@@ -167,4 +167,127 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "set_browser_mode",
+            "description": (
+                "Switch the browser between visible and headless. "
+                "visible opens a real window the user can watch. headless is fast and invisible. "
+                "Page state is lost on switch."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "mode": {"type": "string", "enum": ["headless", "visible"],
+                             "description": "visible or headless."}
+                },
+                "required": ["mode"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_docs",
+            "description": (
+                "Search the user's indexed documents (pdf, docx, web pages). "
+                "Returns top passages with file name and page. "
+                "Use for any specific question about a document."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Specific question or keywords, 3-12 words."},
+                    "source": {"type": "string", "description": "Optional exact file name from list_docs to restrict search."},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_doc",
+            "description": (
+                "Read one part of an indexed document in order, about 2700 chars per part. "
+                "Use for summaries, overviews, and whole-document tasks. "
+                "Part 1 first, then 2, 3. Result header shows total parts."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "description": "Exact file name from list_docs."},
+                    "part": {"type": "integer", "description": "Part number, starting at 1."},
+                },
+                "required": ["source"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_docs",
+            "description": "List indexed documents with chunk and part counts.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ingest_doc",
+            "description": "Index a file already in the workspace (pdf, docx, txt, md) so it can be searched. Returns chunk count.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string", "description": "Exact workspace file name, e.g. 'paper.pdf'."}
+                },
+                "required": ["filename"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "upload_doc",
+            "description": (
+                "Open a small window with an Upload button so the user can pick documents "
+                "(pdf, docx, txt, md). Files are copied to the workspace and indexed. "
+                "Call when the user wants to add, upload, or attach a document. "
+                "Not for web links."
+            ),
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ingest_url",
+            "description": (
+                "Download a web page or PDF link and index it so it can be searched. "
+                "Call when the user gives a URL to add as a document. Returns chunk count."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "Full http or https link."}
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "remove_doc",
+            "description": "Remove one indexed document by exact file name from list_docs.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "description": "Exact file name from list_docs."}
+                },
+                "required": ["source"],
+            },
+        },
+    },
 ]

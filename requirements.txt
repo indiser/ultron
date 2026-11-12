@@ -13,3 +13,6 @@ requests
 soundfile
 sounddevice
 pocket-tts
+chromadb 
+pypdf 
+python-docx

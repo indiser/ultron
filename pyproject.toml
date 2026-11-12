@@ -6,11 +6,15 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "asyncio>=4.0.0",
+    "chromadb>=1.5.9",
     "ddgs>=9.16.1",
     "mcp>=2.3.0",
     "numpy>=2.5.4",
     "openai>=3.42.0",
+    "pocket-tts>=4.0.1",
     "pydantic>=2.14.2",
+    "pypdf>=7.0.1",
+    "python-docx>=1.2.0",
     "python-dotenv>=1.2.4",
     "requests>=2.34.2",
     "scikit-learn>=1.9.1",
