@@ -84,7 +84,7 @@ Ultron has no built-in STT. Voice input is currently handled by [Wispr Flow](htt
 ### Install
 
 ```bash
-git clone <repo>
+git clone https://github.com/indiser/ultron.git
 cd Ultron
 uv sync
 ```
