@@ -46,6 +46,8 @@ async def call_tool(name: str, args: dict) -> str:
         return await ingest_url(**args)
     if name in LOCAL_TOOLS:
         return LOCAL_TOOLS[name](**args)
+    if name == "browser_navigate" and not args.get("url"):
+        return "error: browser_navigate needs url. Example: https://en.wikipedia.org/wiki/India"
     if name.startswith("browser_"):
         s = browser_sessions.get(browser_state["mode"])
         if not s:

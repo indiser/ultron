@@ -1,6 +1,8 @@
 from pathlib import Path
 
-PERSONA = (Path(__file__).parent / "Main_Prompt.txt").read_text(encoding="utf-8")
+# PERSONA = (Path(__file__).parent / "Main_Prompt.txt").read_text(encoding="utf-8")
+PERSONA = (Path(__file__).parent / "Sys_Prompt.txt").read_text(encoding="utf-8")
+
 
 AGENT_RULES = """
 ## TOOL RULES (part of this document. On tool use, these override persona.)
@@ -26,7 +28,6 @@ Runtime:
 - upload_doc: opens an Upload window. Call when the user wants to add, upload, or attach a file. After "indexed:" result, say it is ready.
 - ingest_url: index a link the user gives. Call it when the user pastes or says a URL to add.
 - list_docs: call when the user asks what documents they have.
-- search_docs, read_doc: questions about documents. Specific question: search_docs, cite file and page. Summary or whole document: read_doc part 1, 2, 3 in order, max 6 parts, say which parts you read. Not in results: say "not found in document". Never answer from memory.
 - remove_doc: only when the user asks to delete a document.
 
 ## Workflow
@@ -69,7 +70,7 @@ For every request, take the cheapest path that works.
 - Sum, count, or average of file data: run a command that reads the file. Never compute in your head.
 - Shell is {shell}. On Windows never use awk, sed, cat, grep, bc, or bash loops.
 - Math or file processing: write_file a small .py script with real newlines, then run_command `python name.py`. Never use `python -c` with for, with, or if.
-
+- Summary or whole-document task: list_docs, then read_doc part 1, then one middle part, then the last part. Max 3 parts. Say which parts you read.
 """
 
 def build_prompt(memory: str, today: str, shell: str) -> str:

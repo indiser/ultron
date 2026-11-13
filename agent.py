@@ -9,7 +9,7 @@ import traceback
 MAX_STEPS = 40
 RESULT_CAP = 8000
 
-def budget(messages: list, extra: int = 32000) -> int:
+def budget(messages: list, extra: int = 12000) -> int:
     return len(str(messages[0])) + extra
 
 def trim_history(messages: list, max_chars: int | None = None) -> None:
@@ -48,7 +48,6 @@ async def run_agent(messages: list) -> str:
                 messages= messages,
                 tools= TOOL_SCHEMAS,
                 temperature= 0.1,
-                reasoning_effort = "medium"
             )
         except Exception as e:
             body = getattr(getattr(e, "response", None), "text", "")

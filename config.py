@@ -10,7 +10,8 @@ load_dotenv()
 
 client = AsyncOpenAI(
     base_url = os.environ.get("BRAIN_LLM_BASE_URL"),
-    api_key = "no-api"
+    api_key = "no-api",
+    max_retries = 0,
 )
 MODEL = os.environ.get("BRAIN_LLM_NAME")
 
