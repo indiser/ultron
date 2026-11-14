@@ -14,6 +14,10 @@ import shutil
 from pathlib import Path
 from config import WORKSPACE
 from rag import ingest_doc, ingest_url, list_docs, remove_doc, upload_doc
+from interrupt import run_cancellable
+from text_ui import c, read_you
+
+STOP_WORDS = {"stop", "/stop", "quiet", "enough", "shut up"}
 
 def wait_port(port: int, timeout: float = 15) -> bool:
     end = time.time() + timeout
@@ -44,12 +48,17 @@ async def main():
                     today=date.today().isoformat(),
                     shell="Windows cmd.exe" if os.name == "nt" else "bash")}
             ]
-            print("\nUltron")
+            # print("\nUltron")
+            print(c("info", "\nUltron"))
             pending = []
             try:
                 while True:
-                    user = input("\nyou: ")
+                    # user = input("\nyou: ")
+                    user = read_you()
                     cmd = user.strip()
+                    if cmd.lower().strip(" .!") in STOP_WORDS:
+                        voice_out.stop()
+                        continue
                     if cmd == "/upload":
                         res = await asyncio.to_thread(upload_doc)
                         print(res)
@@ -78,14 +87,33 @@ async def main():
                     if cmd.startswith("/remove "):
                         print(remove_doc(cmd[8:].strip()))
                         continue
+                    held = list(pending)
                     if pending:
                         user = "[system: " + "; ".join(pending) + ". Use search_docs or read_doc for questions about them.]\n" + user
                         pending.clear()
                     voice_out.stop()
+                    n = len(messages)
                     messages.append({"role": "user", "content": user})
-                    answer = await run_agent(messages)
-                    print(f"\nAssistant: {answer}")
-                    voice_out.speak(answer)
+                    # print(" [Esc = cancel]")
+                    print(c("think", " [Esc = cancel]"))
+                    answer, cancelled = await run_cancellable(run_agent(messages))
+                    if cancelled:
+                        del messages[n:]
+                        pending.extend(held)
+                        voice_out.stop()
+                        # print("\n [cancelled]")
+                        print(c("info", "\n [cancelled]"))
+                        continue
+                    # answer = await run_agent(messages)
+                    # print(f"\nAssistant: {answer}")
+                    # if not answer.startswith("error:"):
+                    #     voice_out.speak(answer)
+                    if answer.startswith("error:"):
+                        print("\n" + c("error", answer))
+                    else:
+                        print("\n" + c("assistant", "Assistant: " + answer))
+                        voice_out.speak(answer)
+                    # voice_out.speak(answer)
             except (EOFError, KeyboardInterrupt):
                 print("\nbye")
     finally:

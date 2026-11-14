@@ -4,7 +4,7 @@ from tools_schema import TOOL_SCHEMAS
 import json
 from tools import call_tool, missing_args
 import traceback
-
+from text_ui import c
 
 MAX_STEPS = 40
 RESULT_CAP = 8000
@@ -38,6 +38,7 @@ async def run_agent(messages: list) -> str:
     searched = False
     seen = set()
     cmd_fails = 0
+    errs = 0
     for _ in range(MAX_STEPS):
         trim_history(messages=messages)
         drop_old_turns(messages=messages)
@@ -48,12 +49,14 @@ async def run_agent(messages: list) -> str:
                 messages= messages,
                 tools= TOOL_SCHEMAS,
                 temperature= 0.1,
+                max_tokens= 1500
             )
         except Exception as e:
             body = getattr(getattr(e, "response", None), "text", "")
             return f"error: model call failed: {e} {body[:800]}"
     
-        print(f" [llm] {time.time() - t:.1f}s")
+        # print(f" [llm] {time.time() - t:.1f}s")
+        print(c("think", f" [llm] {time.time() - t:.1f}s"))
         message = response.choices[0].message
     
         if not message.tool_calls:
@@ -73,7 +76,8 @@ async def run_agent(messages: list) -> str:
             name = call.function.name
             try:
                 args = json.loads(call.function.arguments or "{}")
-                print(f" [tool] {name}({args})")
+                # print(f" [tool] {name}({args})")
+                print(c("tool", f" [tool] {name}({args})"))
                 key = (name, json.dumps(args, sort_keys=True))
                 if name == "research" and not searched and not args.get("save_to"):
                     result = "error: call web_search first. Use research only if snippets lack the answer."
@@ -85,17 +89,24 @@ async def run_agent(messages: list) -> str:
                     result = f"error: {name} missing required args: {', '.join(miss)}. Resend the full call with all args."
                 else:
                     seen.add(key)
-                    if name == "web_search":
+                    if name in ("web_search", "research"):
                         searched = True
                     result = str(await call_tool(name, args))[:RESULT_CAP]
                     if name == "write_file" and result.startswith("wrote"):
                         cmd_fails = 0
                     if name == "run_command" and any(s in result for s in ("is not recognized", "SyntaxError", "Traceback", "was unexpected")):
                         cmd_fails += 1
-                print(f" [result] {result[:300]}")
+                # print(f" [result] {result[:300]}")
+                print(c("result", f" [result] {result[:300]}"))
             except Exception as e:
                 traceback.print_exc()
                 result = f"error: {type(e).__name__}: {e}"
-                print(f" [error] {result}")
+                # print(f" [error] {result}")
+                print(c("error", f" [error] {result}"))
             messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
+            errs = errs + 1 if result.startswith("error:") else 0
+        if errs >= 4:
+            text = "stopped: tools kept failing. Last error: " + result[:200]
+            messages.append({"role": "assistant", "content": text})
+            return text
     return "stopped: too many tool steps. Ask again with a narrower request."

@@ -6,6 +6,7 @@ from mcp_client import mcp_session, browser_sessions, browser_state
 from research_tool import research
 from tools_schema import TOOL_SCHEMAS
 from rag import ingest_doc, search_docs, read_doc, list_docs, upload_doc, ingest_url, remove_doc
+from interrupt import ask
 
 def set_browser_mode(mode: str) -> str:
     if mode not in ("headless", "visible"):
@@ -38,7 +39,8 @@ GATED = {"browser_click", "browser_type", "browser_fill_form", "browser_press_ke
 # Call tools mcp or local as nesessary
 async def call_tool(name: str, args: dict) -> str:
     if name in GATED:
-        if input(f"\n Browser {name} {args}? [y/N] ").strip().lower() != "y":
+        # if input(f"\n Browser {name} {args}? [y/N] ").strip().lower() != "y":
+        if ask(f"\n Confirm {name} {args}? [y/N] ").strip().lower() != "y":
             return "The user declined this browser action"
     if name == "research":
         return await research(**args)

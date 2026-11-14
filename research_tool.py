@@ -6,6 +6,7 @@ from config import QUERY_PREFIX, safe_path
 from mcp_client import mcp_session
 from web_tool import ddg
 import asyncio
+from timeline_rows import extract_timeline_rows
 
 # Webpage markdown cleanup
 def clean_markdown(text: str) -> str:
@@ -186,7 +187,10 @@ async def research(query: str, save_to: str = "", top_k: int = 3) -> str:
     need = max(5, int(want * 0.8))
     if save_to:
         for p in pages:
-            items = next((c for c in (extract_table_rows(p["text"]), extract_items(p["text"]))
+            # items = next((c for c in (extract_table_rows(p["text"]), extract_items(p["text"]))
+            #               if len(c) >= need), [])
+            items = next((c for c in (extract_table_rows(p["text"]), extract_items(p["text"]),
+                        extract_timeline_rows(p["text"]))
                           if len(c) >= need), [])
             if not items:
                 rows = [l[:250] for l in p["text"].splitlines() if l.lstrip().startswith("|")]

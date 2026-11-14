@@ -155,7 +155,7 @@ TOOL_SCHEMAS = [
             "description": (
                 "Deep web research. Slow, 30-90 seconds. Opens 5 pages, ranks them, returns best passages and source URL. "
                 "Use only when web_search snippets lack the answer, or for detail, comparison, or lists. "
-                "Set save_to only to save a numbered list to a file."
+                "Set save_to only to save a numbered a ranked list or year/event timeline from one page to a file."
             ),
             "parameters": {
                 "type": "object",
