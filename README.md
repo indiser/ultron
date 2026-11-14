@@ -18,13 +18,17 @@ The persona is inspired by the philosophical, darkly funny Ultron of the cinema 
 
 ```
 main.py
+  ├── interrupt.py          ← Esc key cancellation of in-flight agent tasks (Windows)
+  ├── text_ui.py            ← ANSI colour theming for the terminal
   └── agent.py              ← agentic loop (MAX_STEPS=40, dynamic context budget, tool dispatch)
         ├── tools.py        ← tool router (local + MCP + browser)
         │     ├── file_tools.py     ← sandboxed workspace R/W
         │     ├── shell_tool.py     ← user-approved subprocess execution
         │     ├── web_tool.py       ← DuckDuckGo search
-        │     ├── research_tool.py  ← deep web research (embedding + PageRank scoring)
+        │     ├── research_tool.py  ← deep web research (embedding + PageRank + timeline scoring)
+        │     │     └── timeline_rows.py  ← year/event table extractor
         │     ├── rag.py            ← document RAG (ChromaDB + PDF/DOCX/URL ingestion)
+        │     │     └── upload_ui.py      ← Tkinter file picker window
         │     ├── mem_tools.py      ← persistent memory (memory.md)
         │     └── mcp_client.py     ← MCP servers (time, Scrapling) + Playwright browser
         └── voice_out.py            ← offline TTS pipeline (PocketTTS + sentence streaming)
@@ -33,9 +37,9 @@ main.py
 ### Core Components
 
 **Agent Loop** (`agent.py`)
-The brain. Runs up to 40 reasoning steps per query. Each step calls the LLM, dispatches tool calls, feeds results back, and repeats until the model produces a final text response. Context window management is dynamic — the budget is computed from the system prompt size plus a fixed 32k overhead, trimming old tool results and dropping stale turns as needed. Result cap is 8000 chars per tool call. `reasoning_effort` is set to `medium`.
+The brain. Runs up to 40 reasoning steps per query. Each step calls the LLM, dispatches tool calls, feeds results back, and repeats until the model produces a final text response. Context window management is dynamic — the budget is computed from the system prompt size plus a 12k overhead, trimming old tool results and dropping stale turns as needed. Result cap is 8000 chars per tool call. Responses are capped at 1500 tokens. A consecutive error counter aborts the loop early after 4 back-to-back tool failures rather than burning all 40 steps.
 
-**Research Engine** (`research_tool.py`)
+**Research Engine** (`research_tool.py` + `timeline_rows.py`)
 For deep queries, it:
 1. Searches DuckDuckGo for 8 candidates
 2. Fetches the top 5 pages concurrently via Scrapling MCP
@@ -44,8 +48,10 @@ For deep queries, it:
 5. Scores pages with a hybrid of: cosine similarity to query, a simplified PageRank over inter-page embedding similarity, and reciprocal rank fusion (RRF)
 6. Returns the best passages from the top-ranked source
 
-**RAG System** (`rag.py`)
-Document intelligence backed by ChromaDB. Supports ingesting PDFs, DOCX, plain text, markdown, and web URLs. Chunks documents into 900-char overlapping segments, embeds them, and stores them in a persistent local vector store. The agent can search across all indexed documents semantically, read them sequentially in parts, or remove them. A small Tkinter upload window (`upload_ui.py`) lets the user attach files without typing paths. Slash commands in the terminal (`/upload`, `/add`, `/docs`, `/remove`) provide direct access outside the agent loop.
+`timeline_rows.py` adds a dedicated extractor for year/event markdown tables (e.g. historical timelines), deduplicating rows and returning them only when a minimum run of 5 valid entries is found.
+
+**RAG System** (`rag.py` + `upload_ui.py`)
+Document intelligence backed by ChromaDB. Supports ingesting PDFs, DOCX, plain text, markdown, and web URLs. Chunks documents into 900-char overlapping segments, embeds them, and stores them in a persistent local vector store. The agent can search across all indexed documents semantically, read them sequentially in parts, or remove them. `upload_ui.py` is a minimal Tkinter window — a single Upload button that opens a multi-file picker and prints the chosen paths as JSON for the parent process to consume. Slash commands in the terminal (`/upload`, `/add`, `/docs`, `/remove`) provide direct access outside the agent loop.
 
 **Embedding** (`embed.py`)
 Dual-mode: uses a remote OpenAI-compatible embedding endpoint if `EMBED_BASE_URL` is set, otherwise falls back to a local `sentence-transformers` model. Zero code change required to switch. Used by both the research engine and the RAG system.
@@ -62,6 +68,9 @@ Connects to two MCP servers at startup via stdio:
 - `scrapling mcp` — JavaScript-capable web scraping (used internally by the research engine)
 
 Tools are dynamically registered into the LLM's tool schema at runtime.
+
+**Terminal UI** (`text_ui.py` + `interrupt.py`)
+Two small quality-of-life modules. `text_ui.py` applies ANSI 256-colour theming to every output category — your input, the assistant's reply, tool calls, results, errors, and status lines — with a `NO_COLOR` env escape hatch. `interrupt.py` runs a background thread on Windows that watches for an Esc keypress and cancels the in-flight agent coroutine via `asyncio.CancelledError`, cleanly rolling back the message history and pending RAG state so the conversation is left intact. Stop words (`stop`, `quiet`, `shut up`, etc.) typed as input also halt speech immediately without invoking the agent.
 
 **Persona** (`Main_Prompt.txt`)
 A 14-section system prompt defining identity, voice, humor rules, safety floor, security robustness, and output format. Composed with agent tool rules at runtime via `build_prompt()` in `SYSTEM_PROMPT.py`. The persona is a costume. Competence is not optional.
@@ -100,7 +109,8 @@ BRAIN_LLM_BASE_URL=<openai-compatible-base-url>
 # Optional: remote embeddings (falls back to local sentence-transformers)
 EMBED_BASE_URL=<embedding-endpoint>
 
-# TTS: path to your voice state file (generated from a reference audio clip)
+# TTS: path to your .safetensors voice state file
+# Defaults to first_voice.safetensors in the project root if not set
 TTS_STATE=<path-to-voice.safetensors>
 ```
 
