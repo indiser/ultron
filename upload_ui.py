@@ -10,7 +10,7 @@ def pick():
     chosen = list(filedialog.askopenfilenames(
         parent=root,
         title="Choose documents",
-        filetypes=[("Documents", "*.pdf *.docx *.txt *.md"), ("All files", "*.*")],
+        filetypes=[("Documents", "*.pdf *.docx *.txt *.md *.png *.jpg *.jpeg *.webp"), ("All files", "*.*")],
     ))
     root.destroy()
 

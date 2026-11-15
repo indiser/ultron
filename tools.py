@@ -7,6 +7,7 @@ from research_tool import research
 from tools_schema import TOOL_SCHEMAS
 from rag import ingest_doc, search_docs, read_doc, list_docs, upload_doc, ingest_url, remove_doc
 from interrupt import ask
+from ocr_tool import ocr_image
 
 def set_browser_mode(mode: str) -> str:
     if mode not in ("headless", "visible"):
@@ -46,6 +47,8 @@ async def call_tool(name: str, args: dict) -> str:
         return await research(**args)
     if name == "ingest_url":
         return await ingest_url(**args)
+    if name == "ocr_image":
+        return await ocr_image(**args)
     if name in LOCAL_TOOLS:
         return LOCAL_TOOLS[name](**args)
     if name == "browser_navigate" and not args.get("url"):

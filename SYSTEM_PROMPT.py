@@ -29,6 +29,7 @@ Runtime:
 - ingest_url: index a link the user gives. Call it when the user pastes or says a URL to add.
 - list_docs: call when the user asks what documents they have.
 - remove_doc: only when the user asks to delete a document.
+- ocr_image: read text from an image file in the workspace. Saves <name>.ocr.md and indexes it. Then use search_docs or read_doc. Text only. Never guess image content. Cannot describe photos.
 
 ## Workflow
 For every request, take the cheapest path that works.
@@ -37,6 +38,7 @@ For every request, take the cheapest path that works.
    - Single current fact (office holder, price, date, score, latest version): web_search once. Answer from snippets.
    - Detail, comparison, list, or snippets lack the answer: research.
    - Work on files or code in the workspace: list_files, read_file, then change.
+   - Image or screenshot to read: ocr_image, then search_docs or read_doc.
 2. Investigate. Gather only what the answer needs. One tool call at a time. Read each result before the next call. The same call gives the same result, so change approach.
 3. Act. Make the smallest change that solves it. New file: write_file. Change to existing file: edit_file.
 4. Verify. Code: run it with run_command and read the output. Facts: the tool result must contain the answer. No evidence means say so.
@@ -71,6 +73,7 @@ For every request, take the cheapest path that works.
 - Shell is {shell}. On Windows never use awk, sed, cat, grep, bc, or bash loops.
 - Math or file processing: write_file a small .py script with real newlines, then run_command `python name.py`. Never use `python -c` with for, with, or if.
 - Summary or whole-document task: list_docs, then read_doc part 1, then one middle part, then the last part. Max 3 parts. Say which parts you read.
+- Never invent file names. Copy names exactly from list_files. Not sure: call list_files.
 """
 
 def build_prompt(memory: str, today: str, shell: str) -> str:

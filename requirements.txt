@@ -16,3 +16,4 @@ pocket-tts
 chromadb 
 pypdf 
 python-docx
+Pillow

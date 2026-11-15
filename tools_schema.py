@@ -290,4 +290,22 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "ocr_image",
+            "description": (
+                "Read text from an image file in the workspace (png, jpg, jpeg, webp, bmp). "
+                "Saves text to <name>.ocr.md and indexes it. Returns a short preview only. "
+                "Then use search_docs or read_doc for details. Cannot describe photos."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string", "description": "File name copied exactly from list_files output."}
+                },
+                "required": ["filename"],
+            },
+        },
+    },
 ]

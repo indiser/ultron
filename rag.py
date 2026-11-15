@@ -70,6 +70,9 @@ def _extract(path: Path) -> list[tuple[str, str]]:
         return [("", "\n\n".join(parts))]
     if ext == ".doc":
         raise ValueError("old .doc not supported. Save as .docx first.")
+    if ext in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}:
+        from ocr_tool import ocr_file_sync
+        return [("", ocr_file_sync(path))]
     return [("", path.read_text(encoding="utf-8", errors="replace"))]
 
 

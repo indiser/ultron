@@ -92,6 +92,10 @@ async def run_agent(messages: list) -> str:
                     if name in ("web_search", "research"):
                         searched = True
                     result = str(await call_tool(name, args))[:RESULT_CAP]
+                    if result.startswith("error:"):
+                        seen.discard(key)
+                    if name in ("write_file", "edit_file") and result.startswith(("wrote", "edited")):
+                        seen.clear()
                     if name == "write_file" and result.startswith("wrote"):
                         cmd_fails = 0
                     if name == "run_command" and any(s in result for s in ("is not recognized", "SyntaxError", "Traceback", "was unexpected")):
