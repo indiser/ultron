@@ -29,6 +29,7 @@ main.py
         │     │     └── timeline_rows.py  ← year/event table extractor
         │     ├── rag.py            ← document RAG (ChromaDB + PDF/DOCX/URL ingestion)
         │     │     └── upload_ui.py      ← Tkinter file picker window
+        │     ├── ocr_tool.py       ← async OCR pipeline (image → text → RAG)
         │     ├── mem_tools.py      ← persistent memory (memory.md)
         │     └── mcp_client.py     ← MCP servers (time, Scrapling) + Playwright browser
         └── voice_out.py            ← offline TTS pipeline (PocketTTS + sentence streaming)
@@ -37,7 +38,7 @@ main.py
 ### Core Components
 
 **Agent Loop** (`agent.py`)
-The brain. Runs up to 40 reasoning steps per query. Each step calls the LLM, dispatches tool calls, feeds results back, and repeats until the model produces a final text response. Context window management is dynamic — the budget is computed from the system prompt size plus a 12k overhead, trimming old tool results and dropping stale turns as needed. Result cap is 8000 chars per tool call. Responses are capped at 1500 tokens. A consecutive error counter aborts the loop early after 4 back-to-back tool failures rather than burning all 40 steps.
+The brain. Runs up to 40 reasoning steps per query. Each step calls the LLM, dispatches tool calls, feeds results back, and repeats until the model produces a final text response. Context window management is dynamic — the budget is computed from the system prompt size plus a 12k overhead, trimming old tool results and dropping stale turns as needed. Result cap is 8000 chars per tool call. Responses are capped at 1500 tokens. A consecutive error counter aborts the loop early after 4 back-to-back tool failures rather than burning all 40 steps. After a successful `write_file` or `edit_file`, the deduplication set is cleared so the agent can make fresh calls on the updated file.
 
 **Research Engine** (`research_tool.py` + `timeline_rows.py`)
 For deep queries, it:
@@ -48,16 +49,19 @@ For deep queries, it:
 5. Scores pages with a hybrid of: cosine similarity to query, a simplified PageRank over inter-page embedding similarity, and reciprocal rank fusion (RRF)
 6. Returns the best passages from the top-ranked source
 
-`timeline_rows.py` adds a dedicated extractor for year/event markdown tables (e.g. historical timelines), deduplicating rows and returning them only when a minimum run of 5 valid entries is found.
+`timeline_rows.py` adds a dedicated extractor for year/event markdown tables (e.g. historical timelines), deduplicating rows and returning them only when a minimum run of 5 valid entries is found. The research engine tries `extract_table_rows`, `extract_items`, and `extract_timeline_rows` in order when saving to a file.
 
 **RAG System** (`rag.py` + `upload_ui.py`)
 Document intelligence backed by ChromaDB. Supports ingesting PDFs, DOCX, plain text, markdown, and web URLs. Chunks documents into 900-char overlapping segments, embeds them, and stores them in a persistent local vector store. The agent can search across all indexed documents semantically, read them sequentially in parts, or remove them. `upload_ui.py` is a minimal Tkinter window — a single Upload button that opens a multi-file picker and prints the chosen paths as JSON for the parent process to consume. Slash commands in the terminal (`/upload`, `/add`, `/docs`, `/remove`) provide direct access outside the agent loop.
+
+**OCR Pipeline** (`ocr_tool.py`)
+Reads text from image files in the workspace (PNG, JPG, JPEG, WEBP, BMP). Images are preprocessed with Pillow — EXIF rotation corrected, resized to a max side of 2000px, and JPEG-encoded — then sent as base64 to an async job queue on the remote embedding server (`EMBED_BASE_URL/ocr`). The pipeline polls for completion, writes the extracted text to `<name>.ocr.md`, and immediately indexes it into the RAG store. Results are cached on disk: if the `.ocr.md` file is newer than the source image, the server is not called again. Requires `EMBED_BASE_URL` to be set.
 
 **Embedding** (`embed.py`)
 Dual-mode: uses a remote OpenAI-compatible embedding endpoint if `EMBED_BASE_URL` is set, otherwise falls back to a local `sentence-transformers` model. Zero code change required to switch. Used by both the research engine and the RAG system.
 
 **Browser Control** (`mcp_client.py`)
-Two Playwright MCP sessions run in parallel at startup — one headless (backed by Obscura's CDP endpoint on port 9222), one visible. The agent defaults to headless. `set_browser_mode` switches between them. Available browser tools: `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_fill_form`, `browser_press_key`, `browser_wait_for`. Click and form actions require user approval.
+Two Playwright MCP sessions run in parallel at startup — one headless (backed by Obscura's CDP endpoint on port 9222), one visible. The agent defaults to headless. `set_browser_mode` switches between them. Available browser tools: `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_fill_form`, `browser_press_key`, `browser_wait_for`. Click and form actions require user approval via `interrupt.ask()`, which pauses the Esc watcher so it doesn't race with the keyboard prompt.
 
 **Voice Pipeline** (`voice_out.py`)
 Fully async, two-thread pipeline powered by [PocketTTS](https://github.com/pocket-tts/pocket-tts) — a local, offline TTS model. At startup, the model loads a `.safetensors` voice state file cloned from a reference audio clip. A synthesis thread streams audio chunks via `generate_audio_stream`, and a playback thread writes them directly to a `sounddevice` output stream. Sentences are split and queued as the LLM responds, so speech begins before the full response is generated. No network calls, no API keys, no remote endpoints — the entire voice pipeline runs on-device.
@@ -72,8 +76,8 @@ Tools are dynamically registered into the LLM's tool schema at runtime.
 **Terminal UI** (`text_ui.py` + `interrupt.py`)
 Two small quality-of-life modules. `text_ui.py` applies ANSI 256-colour theming to every output category — your input, the assistant's reply, tool calls, results, errors, and status lines — with a `NO_COLOR` env escape hatch. `interrupt.py` runs a background thread on Windows that watches for an Esc keypress and cancels the in-flight agent coroutine via `asyncio.CancelledError`, cleanly rolling back the message history and pending RAG state so the conversation is left intact. Stop words (`stop`, `quiet`, `shut up`, etc.) typed as input also halt speech immediately without invoking the agent.
 
-**Persona** (`Main_Prompt.txt`)
-A 14-section system prompt defining identity, voice, humor rules, safety floor, security robustness, and output format. Composed with agent tool rules at runtime via `build_prompt()` in `SYSTEM_PROMPT.py`. The persona is a costume. Competence is not optional.
+**Persona** (`Sys_Prompt.txt`)
+The active system prompt defining identity, voice, humor rules, safety floor, and security robustness. Composed with agent tool rules at runtime via `build_prompt()` in `SYSTEM_PROMPT.py`. The persona is a costume. Competence is not optional.
 
 **Speech Input (external)**
 Ultron has no built-in STT. Voice input is currently handled by [Wispr Flow](https://wisprflow.ai), which transcribes speech system-wide and types the result into the terminal. It works, but it phones home. The planned replacement is [Handy](https://github.com/handyai/handy) — a fully offline STT tool with the same system-wide injection behaviour, keeping the entire pipeline air-gapped.
@@ -88,12 +92,12 @@ Ultron has no built-in STT. Voice input is currently handled by [Wispr Flow](htt
 - A running LLM backend with an OpenAI-compatible API (e.g. vLLM, Ollama, LM Studio)
 - [Obscura](https://github.com/nicholasgasior/obscura) in PATH (for headless browser support)
 - Node.js + npx (for Playwright MCP)
-- *(Optional)* A remote embedding endpoint
+- *(Optional)* A remote embedding endpoint (also required for OCR)
 
 ### Install
 
 ```bash
-git clone https://github.com/indiser/ultron.git
+git clone <repo>
 cd Ultron
 uv sync
 ```
@@ -107,6 +111,7 @@ BRAIN_LLM_NAME=<your-model-name>
 BRAIN_LLM_BASE_URL=<openai-compatible-base-url>
 
 # Optional: remote embeddings (falls back to local sentence-transformers)
+# Required for OCR
 EMBED_BASE_URL=<embedding-endpoint>
 
 # TTS: path to your .safetensors voice state file
@@ -151,6 +156,7 @@ These are handled directly in the input loop, outside the agent:
 | `ingest_url` | Download and index a web page or PDF link |
 | `upload_doc` | Open a file picker UI to upload and index documents |
 | `remove_doc` | Remove a document from the RAG store |
+| `ocr_image` | Extract text from an image, save as `.ocr.md`, and index it |
 | `set_browser_mode` | Switch browser between headless and visible |
 | `browser_navigate` | Navigate to a URL |
 | `browser_snapshot` | Capture the current page state |
@@ -168,11 +174,12 @@ These are handled directly in the input loop, outside the agent:
 
 This is version 0.1.0. It is a proof of concept, not a production system.
 
-- The LLM backend and embedding server are expected to be externally hosted (e.g. on a Colab instance tunneled via Cloudflare). They are ephemeral and will go down. The TTS pipeline is fully local and offline.
+- The LLM backend and embedding server are expected to be externally hosted (e.g. on a Colab or Kaggle instance tunneled via Cloudflare). They are ephemeral and will go down. The TTS pipeline is fully local and offline.
 - There is no GUI. It is a terminal loop.
 - Memory is a flat markdown file. There is no retrieval, no forgetting.
 - The RAG store is a local ChromaDB instance. It persists across sessions but has no access control.
 - The workspace is a single flat directory with no permissions model beyond a path check.
+- OCR requires the remote embedding server to be running. It will fail silently if `EMBED_BASE_URL` is not set.
 - Browser actions that mutate state require user approval, but the approval prompt is a simple `y/N` in the terminal.
 - Error handling is functional but not exhaustive.
 - The voice pipeline requires `sounddevice`, which can be finicky on Windows depending on audio drivers.
@@ -184,6 +191,7 @@ This is version 0.1.0. It is a proof of concept, not a production system.
 
 - **Streaming responses** — pipe LLM token deltas directly to the TTS `Stream` class so speech latency drops to near-zero
 - **Voice input** — replace Wispr Flow with [Handy](https://github.com/handyai/handy) for fully offline, privacy-preserving STT; no audio leaves the machine
+- **Local OCR** — replace the remote OCR endpoint with a local model (e.g. Tesseract or a local vision LLM) so image reading works fully offline
 - **GUI / web interface** — a minimal frontend so this isn't terminal-only
 - **Local LLM fallback** — automatic failover to a local model when the remote backend is unreachable
 - **Tool sandboxing** — run `run_command` inside a Docker container or Windows sandbox instead of the host shell
@@ -199,6 +207,7 @@ This is version 0.1.0. It is a proof of concept, not a production system.
 
 Core: `openai`, `mcp`, `ddgs`, `scrapling`, `sentence-transformers`, `numpy`, `python-dotenv`
 RAG: `chromadb`, `pypdf`, `python-docx`
+OCR: `pillow`, `httpx`
 Browser: `@playwright/mcp` (via npx), `obscura`
 Audio: `sounddevice`, `soundfile`, `pocket-tts`, `torch`
 Runtime: `uv` (Python 3.14+)
