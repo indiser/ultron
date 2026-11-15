@@ -22,7 +22,7 @@ main.py
   ├── text_ui.py            ← ANSI colour theming for the terminal
   └── agent.py              ← agentic loop (MAX_STEPS=40, dynamic context budget, tool dispatch)
         ├── tools.py        ← tool router (local + MCP + browser)
-        │     ├── file_tools.py     ← sandboxed workspace R/W
+        │     ├── file_tools.py     ← sandboxed workspace R/W + delete
         │     ├── shell_tool.py     ← user-approved subprocess execution
         │     ├── web_tool.py       ← DuckDuckGo search
         │     ├── research_tool.py  ← deep web research (embedding + PageRank + timeline scoring)
@@ -30,6 +30,8 @@ main.py
         │     ├── rag.py            ← document RAG (ChromaDB + PDF/DOCX/URL ingestion)
         │     │     └── upload_ui.py      ← Tkinter file picker window
         │     ├── ocr_tool.py       ← async OCR pipeline (image → text → RAG)
+        │     ├── weather_tool.py   ← weather + forecast (Open-Meteo) + location helpers
+        │     ├── places_tool.py    ← nearby places (OpenStreetMap Overpass)
         │     ├── mem_tools.py      ← persistent memory (memory.md)
         │     └── mcp_client.py     ← MCP servers (time, Scrapling) + Playwright browser
         └── voice_out.py            ← offline TTS pipeline (PocketTTS + sentence streaming)
@@ -38,7 +40,7 @@ main.py
 ### Core Components
 
 **Agent Loop** (`agent.py`)
-The brain. Runs up to 40 reasoning steps per query. Each step calls the LLM, dispatches tool calls, feeds results back, and repeats until the model produces a final text response. Context window management is dynamic — the budget is computed from the system prompt size plus a 12k overhead, trimming old tool results and dropping stale turns as needed. Result cap is 8000 chars per tool call. Responses are capped at 1500 tokens. A consecutive error counter aborts the loop early after 4 back-to-back tool failures rather than burning all 40 steps. After a successful `write_file` or `edit_file`, the deduplication set is cleared so the agent can make fresh calls on the updated file.
+The brain. Runs up to 40 reasoning steps per query. Each step calls the LLM, dispatches tool calls, feeds results back, and repeats until the model produces a final text response. Context window management is dynamic — the budget is computed from the system prompt size plus a 12k overhead, trimming old tool results and dropping stale turns as needed. Result cap is 8000 chars per tool call. Responses are capped at 1500 tokens. A consecutive error counter aborts the loop early after 4 back-to-back tool failures rather than burning all 40 steps. After a successful `write_file`, `edit_file`, or `delete_file`, the deduplication set is cleared so the agent can make fresh calls on the updated workspace. A per-key failure counter (`fails`) blocks any identical call that has already failed twice. When the user's message contains a research keyword, `wants_research()` detects it and the loop silently remaps any `web_search` call to `research` and nudges the model if it tries to answer without calling the tool first.
 
 **Research Engine** (`research_tool.py` + `timeline_rows.py`)
 For deep queries, it:
@@ -56,6 +58,12 @@ Document intelligence backed by ChromaDB. Supports ingesting PDFs, DOCX, plain t
 
 **OCR Pipeline** (`ocr_tool.py`)
 Reads text from image files in the workspace (PNG, JPG, JPEG, WEBP, BMP). Images are preprocessed with Pillow — EXIF rotation corrected, resized to a max side of 2000px, and JPEG-encoded — then sent as base64 to an async job queue on the remote embedding server (`EMBED_BASE_URL/ocr`). The pipeline polls for completion, writes the extracted text to `<name>.ocr.md`, and immediately indexes it into the RAG store. Results are cached on disk: if the `.ocr.md` file is newer than the source image, the server is not called again. Requires `EMBED_BASE_URL` to be set.
+
+**Weather** (`weather_tool.py`)
+Fetches current conditions and up to 7-day forecasts from Open-Meteo — no API key required. Location is resolved in priority order: explicit argument → saved `location.json` → IP geolocation (cached on first use). Geocoding uses the Open-Meteo geocoding API. IP lookup tries `ip-api.com` with a fallback to `ipapi.co`. The `/loc` slash command lets you set, view, or auto-detect your location without invoking the agent.
+
+**Nearby Places** (`places_tool.py`)
+Finds nearby points of interest via the OpenStreetMap Overpass API — no API key, no ratings. Supports 17 categories (restaurants, hospitals, ATMs, hotels, parks, airports, etc.). Results are sorted by haversine distance from the user's location. Uses the same location resolution stack as the weather tool.
 
 **Embedding** (`embed.py`)
 Dual-mode: uses a remote OpenAI-compatible embedding endpoint if `EMBED_BASE_URL` is set, otherwise falls back to a local `sentence-transformers` model. Zero code change required to switch. Used by both the research engine and the RAG system.
@@ -135,6 +143,9 @@ These are handled directly in the input loop, outside the agent:
 | `/add <path or URL>` | Ingest a local file or web URL directly |
 | `/docs` | List all indexed documents |
 | `/remove <filename>` | Remove a document from the RAG store |
+| `/loc` | Show the currently saved location |
+| `/loc auto` | Re-detect location via IP and save it |
+| `/loc <city>` | Geocode a city and save it as the active location |
 
 ---
 
@@ -146,6 +157,7 @@ These are handled directly in the input loop, outside the agent:
 | `read_file` | Read a workspace file (4000 char limit) |
 | `write_file` | Create or overwrite a workspace file |
 | `edit_file` | Surgical single-occurrence text replacement |
+| `delete_file` | Permanently delete a workspace file (user approval required) |
 | `run_command` | Execute a shell command (user approval required) |
 | `web_search` | Fast DuckDuckGo search, ~2s, returns 5 results |
 | `research` | Deep research: fetch + embed + rank + extract, 30-90s |
@@ -155,8 +167,10 @@ These are handled directly in the input loop, outside the agent:
 | `ingest_doc` | Index a workspace file into the RAG store |
 | `ingest_url` | Download and index a web page or PDF link |
 | `upload_doc` | Open a file picker UI to upload and index documents |
-| `remove_doc` | Remove a document from the RAG store |
+| `remove_doc` | Remove a document from the RAG store (user approval required) |
 | `ocr_image` | Extract text from an image, save as `.ocr.md`, and index it |
+| `get_weather` | Current weather and up to 7-day forecast via Open-Meteo |
+| `find_places` | Nearby places by category via OpenStreetMap, sorted by distance |
 | `set_browser_mode` | Switch browser between headless and visible |
 | `browser_navigate` | Navigate to a URL |
 | `browser_snapshot` | Capture the current page state |
@@ -174,12 +188,14 @@ These are handled directly in the input loop, outside the agent:
 
 This is version 0.1.0. It is a proof of concept, not a production system.
 
-- The LLM backend and embedding server are expected to be externally hosted (e.g. on a Colab or Kaggle instance tunneled via Cloudflare). They are ephemeral and will go down. The TTS pipeline is fully local and offline.
+- The LLM backend and embedding server are expected to be externally hosted (e.g. on a Kaggle instance tunneled via Cloudflare). They are ephemeral and will go down. The TTS pipeline is fully local and offline.
 - There is no GUI. It is a terminal loop.
 - Memory is a flat markdown file. There is no retrieval, no forgetting.
 - The RAG store is a local ChromaDB instance. It persists across sessions but has no access control.
 - The workspace is a single flat directory with no permissions model beyond a path check.
-- OCR requires the remote embedding server to be running. It will fail silently if `EMBED_BASE_URL` is not set.
+- OCR requires the remote embedding server to be running. It will fail if `EMBED_BASE_URL` is not set.
+- Weather and places use free public APIs with no authentication. IP geolocation on first use sends your public IP to `ip-api.com` once; result is cached in `location.json`.
+- `delete_file` is permanent. There is no trash, no undo. The only barrier is a `y/N` prompt.
 - Browser actions that mutate state require user approval, but the approval prompt is a simple `y/N` in the terminal.
 - Error handling is functional but not exhaustive.
 - The voice pipeline requires `sounddevice`, which can be finicky on Windows depending on audio drivers.
@@ -195,6 +211,7 @@ This is version 0.1.0. It is a proof of concept, not a production system.
 - **GUI / web interface** — a minimal frontend so this isn't terminal-only
 - **Local LLM fallback** — automatic failover to a local model when the remote backend is unreachable
 - **Tool sandboxing** — run `run_command` inside a Docker container or Windows sandbox instead of the host shell
+- **Tool routing** — activate tool groups (browser, weather, places, docs, OCR) only when the user's message matches relevant keywords, reducing wrong-tool failures as the tool count grows
 - **Multi-agent** — spawn sub-agents for parallelizable research tasks instead of sequential tool calls
 - **Persistent sessions** — save and restore full conversation history across restarts
 - **Wake word** — always-on microphone with a wake word to trigger the agent without typing
@@ -208,6 +225,7 @@ This is version 0.1.0. It is a proof of concept, not a production system.
 Core: `openai`, `mcp`, `ddgs`, `scrapling`, `sentence-transformers`, `numpy`, `python-dotenv`
 RAG: `chromadb`, `pypdf`, `python-docx`
 OCR: `pillow`, `httpx`
+Weather/Places: `httpx`
 Browser: `@playwright/mcp` (via npx), `obscura`
 Audio: `sounddevice`, `soundfile`, `pocket-tts`, `torch`
 Runtime: `uv` (Python 3.14+)
