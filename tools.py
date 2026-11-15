@@ -8,6 +8,8 @@ from tools_schema import TOOL_SCHEMAS
 from rag import ingest_doc, search_docs, read_doc, list_docs, upload_doc, ingest_url, remove_doc
 from interrupt import ask
 from ocr_tool import ocr_image
+from weather_tool import get_weather
+from places_tool import find_places
 
 def set_browser_mode(mode: str) -> str:
     if mode not in ("headless", "visible"):
@@ -22,6 +24,7 @@ LOCAL_TOOLS = {
     "list_files": list_files,
     "read_file": read_file,
     "write_file": write_file,
+    "delete_file": delete_file,
     "save_memory": save_memory,
     "run_command": run_command,
     "edit_file": edit_file,
@@ -35,14 +38,14 @@ LOCAL_TOOLS = {
     "remove_doc": remove_doc,
 }
 
-GATED = {"browser_click", "browser_type", "browser_fill_form", "browser_press_key", "remove_doc"}
+GATED = {"browser_click", "browser_type", "browser_fill_form", "browser_press_key", "remove_doc", "delete_file"}
 
 # Call tools mcp or local as nesessary
 async def call_tool(name: str, args: dict) -> str:
     if name in GATED:
         # if input(f"\n Browser {name} {args}? [y/N] ").strip().lower() != "y":
         if ask(f"\n Confirm {name} {args}? [y/N] ").strip().lower() != "y":
-            return "The user declined this browser action"
+            return "The user declined this action"
     if name == "research":
         return await research(**args)
     if name == "ingest_url":
@@ -51,8 +54,12 @@ async def call_tool(name: str, args: dict) -> str:
         return await ocr_image(**args)
     if name in LOCAL_TOOLS:
         return LOCAL_TOOLS[name](**args)
+    if name == "get_weather":
+        return await get_weather(**args)
+    if name == "find_places":
+        return await find_places(**args)
     if name == "browser_navigate" and not args.get("url"):
-        return "error: browser_navigate needs url. Example: https://en.wikipedia.org/wiki/India"
+        return 'error: browser_navigate needs url. Resend exactly: {"url": "https://en.wikipedia.org/wiki/India"} with the real link.'
     if name.startswith("browser_"):
         s = browser_sessions.get(browser_state["mode"])
         if not s:
@@ -66,5 +73,5 @@ def missing_args(name: str, args: dict) -> list[str]:
     for t in TOOL_SCHEMAS:
         f = t["function"]
         if f["name"] == name:
-            return [k for k in f["parameters"].get("required", []) if k not in args]
+            return [k for k in f["parameters"].get("required", []) if args.get(k) in (None, "")]
     return []

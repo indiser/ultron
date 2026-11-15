@@ -118,6 +118,7 @@ TOOL_SCHEMAS = [
                 "Quick web search, about 2 seconds. Returns 5 results: title, URL, snippet. "
                 "Use for single current facts: office holders, prices, dates, scores, latest versions. "
                 "Answer from the snippets when they contain the answer."
+                "Never use when the user asks for research or deep research."
             ),
             "parameters": {
                 "type": "object",
@@ -154,7 +155,7 @@ TOOL_SCHEMAS = [
             "name": "research",
             "description": (
                 "Deep web research. Slow, 30-90 seconds. Opens 5 pages, ranks them, returns best passages and source URL. "
-                "Use only when web_search snippets lack the answer, or for detail, comparison, or lists. "
+                "Always use when the user says research or deep research. Also for detail, comparison, or lists. "
                 "Set save_to only to save a numbered a ranked list or year/event timeline from one page to a file."
             ),
             "parameters": {
@@ -305,6 +306,68 @@ TOOL_SCHEMAS = [
                     "filename": {"type": "string", "description": "File name copied exactly from list_files output."}
                 },
                 "required": ["filename"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_file",
+            "description": (
+                "Permanently delete one file in the workspace. User must approve each call. "
+                "Call only when the user asks to delete a file. Cannot delete folders. "
+                "Also removes the file from the document index. Returns 'deleted: <filename>' on success."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string", "description": "File name copied exactly from list_files output."}
+                },
+                "required": ["filename"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": (
+                "Current weather and daily forecast, up to 7 days. "
+                "Leave location empty to use the user's saved location. "
+                "Set location only when the user names another place. "
+                "Use for any weather, temperature, rain, or forecast question. Not web_search."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string", "description": "City name the user said. Empty = saved location."},
+                    "days": {"type": "integer", "description": "Forecast days, 1 to 7. Default 3."},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_places",
+            "description": (
+                "Find nearby places by category: restaurants, cafes, hospitals, pharmacies, ATMs, hotels, "
+                "parks, museums, fuel, airports, stations. Sorted by distance. "
+                "Leave near empty to use the user's saved location. Set near only when the user names another place. "
+                "No ratings or reviews."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "category": {"type": "string", "enum": ["restaurant", "cafe", "fast_food", "bar", "hospital",
+                                 "pharmacy", "atm", "bank", "fuel", "hotel", "museum", "attraction", "park",
+                                 "supermarket", "airport", "railway_station", "bus_station"]},
+                    "near": {"type": "string", "description": "City or area the user named. Empty = saved location."},
+                    "radius_km": {"type": "number", "description": "Search radius in km, 0.2 to 100. Default 10."},
+                    "limit": {"type": "integer", "description": "Results, 1 to 15. Default 10."},
+                },
+                "required": ["category"],
             },
         },
     },

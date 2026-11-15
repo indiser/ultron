@@ -16,6 +16,7 @@ from config import WORKSPACE
 from rag import ingest_doc, ingest_url, list_docs, remove_doc, upload_doc
 from interrupt import run_cancellable
 from text_ui import c, read_you
+from weather_tool import load_location, save_location, ip_location, geocode
 
 STOP_WORDS = {"stop", "/stop", "quiet", "enough", "shut up"}
 
@@ -86,6 +87,20 @@ async def main():
                         continue
                     if cmd.startswith("/remove "):
                         print(remove_doc(cmd[8:].strip()))
+                        continue
+                    if cmd == "/loc" or cmd.startswith("/loc "):
+                        arg = cmd[4:].strip()
+                        try:
+                            if not arg:
+                                loc = load_location()
+                                print(f"{loc['name']} ({loc['source']})" if loc
+                                      else "no location saved. Use /loc auto or /loc <city>")
+                                continue
+                            loc = await ip_location() if arg == "auto" else await geocode(arg)
+                            save_location(loc)
+                            print(f"location saved: {loc['name']} ({loc['source']})")
+                        except Exception as e:
+                            print(c("error", f"error: {e}"))
                         continue
                     held = list(pending)
                     if pending:

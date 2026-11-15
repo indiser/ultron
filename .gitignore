@@ -11,3 +11,6 @@ wheels/
 .env
 *.mp3
 chroma_db/
+location.json
+.playwright-mcp/
+dbg.py

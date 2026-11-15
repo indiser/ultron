@@ -5,6 +5,18 @@ import json
 from tools import call_tool, missing_args
 import traceback
 from text_ui import c
+import re
+
+RESEARCH_RE = RESEARCH_RE = re.compile(r"\b(?:deep[- ]research|research(?:ing)?\s+(?:on|about|into|this|it|the|how|why|what|who|when|where)|(?:do|run|please|can you)\s+research)\b", re.I)
+
+def wants_research(messages: list) -> bool:
+    for m in reversed(messages):
+        if isinstance(m, dict) and m.get("role") == "user":
+            text = m.get("content") or ""
+            if text.startswith("[system:"):
+                text = text.split("\n", 1)[-1]
+            return bool(RESEARCH_RE.search(text))
+    return False
 
 MAX_STEPS = 40
 RESULT_CAP = 8000
@@ -37,6 +49,10 @@ async def run_agent(messages: list) -> str:
     nudged = False
     searched = False
     seen = set()
+    want_research = wants_research(messages)
+    researched = False
+    r_nudged = False
+    fails = {}
     cmd_fails = 0
     errs = 0
     for _ in range(MAX_STEPS):
@@ -61,6 +77,12 @@ async def run_agent(messages: list) -> str:
     
         if not message.tool_calls:
             text = message.content or ""
+            if want_research and not researched and not r_nudged:
+                r_nudged = True
+                if text.strip():
+                    messages.append({"role": "assistant", "content": text})
+                messages.append({"role": "user", "content": "User asked for research. Call the research tool now. Do not answer from memory."})
+                continue
             if not text.strip() and not nudged:
                 nudged = True
                 messages.append({"role": "user", "content": "Answer now, briefly, from the tool results above."})
@@ -76,13 +98,18 @@ async def run_agent(messages: list) -> str:
             name = call.function.name
             try:
                 args = json.loads(call.function.arguments or "{}")
+                if want_research and name == "web_search":
+                    name = "research"
+                    args = {"query": args.get("query", "")}
                 # print(f" [tool] {name}({args})")
                 print(c("tool", f" [tool] {name}({args})"))
                 key = (name, json.dumps(args, sort_keys=True))
-                if name == "research" and not searched and not args.get("save_to"):
+                if name == "research" and not searched and not args.get("save_to") and not want_research:
                     result = "error: call web_search first. Use research only if snippets lack the answer."
                 elif name == "run_command" and cmd_fails >= 5:
                     result = "error: 5 commands failed. Stop. Tell the user what failed and what you tried."
+                elif fails.get(key, 0) >= 2:
+                    result = "error: this exact call failed twice. Change the args or tell the user what is missing."
                 elif key in seen and name not in ("run_command", "browser_snapshot", "set_browser_mode"):
                     result = "error: identical call already made. Change the query or approach, or answer now."
                 elif (miss := missing_args(name, args)):
@@ -91,10 +118,16 @@ async def run_agent(messages: list) -> str:
                     seen.add(key)
                     if name in ("web_search", "research"):
                         searched = True
+                    else:
+                        if name == "research":
+                            researched = True
                     result = str(await call_tool(name, args))[:RESULT_CAP]
                     if result.startswith("error:"):
                         seen.discard(key)
-                    if name in ("write_file", "edit_file") and result.startswith(("wrote", "edited")):
+                        fails[key] = fails.get(key, 0) + 1
+                    if result.startswith("error:"):
+                        seen.discard(key)
+                    if name in ("write_file", "edit_file", "delete_file") and result.startswith(("wrote", "edited", "deleted")):
                         seen.clear()
                     if name == "write_file" and result.startswith("wrote"):
                         cmd_fails = 0

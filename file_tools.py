@@ -36,3 +36,21 @@ def edit_file(filename: str, old: str, new: str) -> str:
         return f"error: old text found {n} times. Include more surrounding lines."
     path.write_text(text.replace(old, new, 1), encoding="utf-8")
     return f"edited: {filename}"
+
+#Delete a File
+def delete_file(filename: str) -> str:
+    try:
+        path = safe_path(filename)
+    except ValueError as e:
+        return f"error: {e}"
+    if not path.exists():
+        return f"error: no file named {filename}"
+    if not path.is_file():
+        return f"error: {filename} is not a file. Folders are not deleted."
+    path.unlink()
+    try:
+        from rag import remove_doc
+        remove_doc(filename)
+    except Exception:
+        pass
+    return f"deleted: {filename}"

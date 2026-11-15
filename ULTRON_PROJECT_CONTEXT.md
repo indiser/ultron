@@ -1,5 +1,5 @@
 <!--
-AI-CONTEXT-DOC | project: Ultron | doc-version: 1.1.0 | last-updated: 2026-11-15
+AI-CONTEXT-DOC | project: Ultron | doc-version: 1.2.0 | last-updated: 2026-11-15
 Update rules are in SECTION 14. Never overwrite; append.
 -->
 
@@ -59,7 +59,7 @@ project/
 ├── tools.py             # call_tool() dispatcher, LOCAL_TOOLS, GATED, missing_args()
 ├── tools_schema.py      # TOOL_SCHEMAS (OpenAI function schemas); MCP tools appended at runtime
 ├── mcp_client.py        # connects MCP servers + browser sessions, registers schemas
-├── file_tools.py        # list_files, read_file, write_file, edit_file
+├── file_tools.py        # list_files, read_file, write_file, edit_file  (+ delete_file v1.2.0)
 ├── mem_tools.py         # load_memory, save_memory (memory.md)
 ├── shell_tool.py        # run_command (approval-gated), venv_env()
 ├── web_tool.py          # ddg(), web_search()
@@ -68,6 +68,8 @@ project/
 ├── rag.py               # ingest/search/read/list/remove docs in ChromaDB
 ├── embed.py             # get_embedder(): local or remote bge-small
 ├── ocr_tool.py          # ocr_image tool + ocr_file_sync(): image → Kaggle OCR job → text
+├── weather_tool.py      # NEW v1.2.0: get_weather, location helpers (IP lookup, geocode, save/load) [UNVERIFIED applied]
+├── places_tool.py       # NEW v1.2.0: find_places via OpenStreetMap Overpass [UNVERIFIED applied]
 ├── upload_ui.py         # tkinter file picker subprocess
 ├── interrupt.py         # ask() prompt lock, run_cancellable() Esc-to-cancel (Windows)
 ├── text_ui.py           # c(kind, text) colors, read_you()
@@ -75,6 +77,7 @@ project/
 ├── huggingface-kaggle-endpoint.ipynb  # Kaggle notebook: serves LLM + embedder via tunnels
 ├── ultron_kaggle_server.ipynb  # NEW notebook (llama.cpp LLM + embeddings + OCR). Supersedes huggingface-kaggle-endpoint.ipynb
 ├── memory.md            # (runtime) persistent user facts, one "- fact" per line
+├── location.json        # (runtime) saved user location {name, lat, lon, tz, source}. Plain text. Keep out of git.
 ├── workspace/           # (runtime) sandbox for agent files, flat names only
 ├── chroma_db/           # (runtime) vector store
 ├── .venv/               # (runtime) uv venv for agent-run commands
@@ -95,6 +98,10 @@ file_tools, mem_tools, embed → config
 tools → ocr_tool (ocr_image)
 rag   → ocr_tool (lazy import inside _extract, image branch)
 ocr_tool → config (safe_path, WORKSPACE); rag (lazy import of ingest_doc inside ocr_image)
+tools → weather_tool (get_weather), places_tool (find_places)
+places_tool → weather_tool (load_location, save_location, ip_location, geocode)
+main → weather_tool (load_location, save_location, ip_location, geocode) for /loc
+file_tools → rag (lazy import of remove_doc inside delete_file)
 ```
 `tools.py` and `shell_tool.py`/`file_tools.py` use `from X import *`. Watch for name collisions when adding module-level names.
 
@@ -134,6 +141,13 @@ Env vars:
 Note v1.1.0: `EMBED_BASE_URL` now also hosts OCR. Client builds OCR URL as `EMBED_BASE_URL.rstrip("/") + "/ocr"` then `/start` and `/<id>`. No separate OCR env var.
 Note v1.1.0: `BRAIN_LLM_NAME` must equal llama-server `--alias`. Notebook sets alias = HF repo id (or GGUF file stem for local paths) and prints the full `.env` block at the end of cell 8.
 
+Added v1.2.0: `config.py` has `LOCATION_FILE = <project>/location.json`. No new env vars.
+External services used without API keys:
+- Open-Meteo forecast `api.open-meteo.com/v1/forecast` and geocoding `geocoding-api.open-meteo.com/v1/search`
+- IP geolocation `ip-api.com/json` (HTTP only, free tier non-commercial, 45 req/min), fallback `ipapi.co/json`
+- OpenStreetMap Overpass `overpass-api.de/api/interpreter` (sends header `User-Agent: UltronAgent/1.0`)
+Privacy: first no-arg weather/places call sends your public IP to ip-api.com once. Result cached in `location.json`. Setting `/loc <city>` first avoids any IP lookup.
+
 Required external binaries: `uv`, `uvx`, `npx`, `obscura`, `scrapling` (CLI with `mcp` subcommand).
 
 ---
@@ -157,10 +171,24 @@ Note: `voice_out` loads the TTS model at import time (prints `[tts] loading mode
 | `/add <path or http url>` | copy+index local file, or `ingest_url` |
 | `/docs` | `list_docs()` |
 | `/remove <source>` | `remove_doc()` |
+| `/loc` | show saved location `[UNVERIFIED applied]` |
+| `/loc auto` | re-detect by IP and save `[UNVERIFIED applied]` |
+| `/loc <city>` or `/loc <city>, <region>` | geocode and save; text after the comma filters same-name cities `[UNVERIFIED applied]` |
 | anything else | goes to agent |
 
 After a successful index, a `pending` list is prepended to the *next* user message as `[system: indexed: ...  Use search_docs or read_doc ...]` so the LLM knows about new docs. If a turn is cancelled (Esc), messages added that turn are deleted (`del messages[n:]`) and `pending` is restored.
 
+Change v1.2.0 `[UNVERIFIED applied]`, forced research routing in `agent.py`:
+- Module level: `RESEARCH_RE = re.compile(r"\bresearch(?:ing)?\b", re.I)` and `wants_research(messages)`: finds last user message, strips the `[system: ...]` first line that `main.py` prepends, returns whether the regex matches.
+- In `run_agent`: `want_research = wants_research(messages)`, `researched = False`, `r_nudged = False`.
+- No-tool-call branch: if `want_research and not researched and not r_nudged` → append assistant text (if any) + user message `User asked for research. Call the research tool now. Do not answer from memory.` and `continue` (once per turn).
+- After `args = json.loads(...)`: if `want_research and name == "web_search"` → `name = "research"`, `args = {"query": args.get("query", "")}` (silent remap).
+- First guard gets `and not want_research` (research allowed without prior web_search).
+- On successful dispatch of `research`: `researched = True`.
+- Regex is loose: any message containing "research" forces research. Stricter variant offered: `\b(?:deep[- ]research|research(?:ing)?\s+(?:on|about|into|this|it|the|how|why|what|who|when|where)|(?:do|run|please|can you)\s+research)\b`.
+- Research failure is final: no fallback to `web_search`.
+
+Change v1.2.0: after successful `write_file`, `edit_file` or `delete_file` (result starts `wrote`, `edited`, `deleted`) → `seen.clear()`. `[UNVERIFIED applied]` for the `seen.clear()` line itself (delete_file itself works).
 Esc cancel works only on Windows (`msvcrt`); on other OS `run_cancellable` just awaits.
 
 ### Per-turn agent loop (`agent.py: run_agent(messages)`)
@@ -186,12 +214,26 @@ Guards inside the loop, evaluated in this order for each tool call:
 | else | execute; `result = str(await call_tool(...))[:8000]` |
 | `fails[key] >= 2` (same (name,args) failed twice) `[UNVERIFIED applied]` | `error: this exact call failed twice. Change the args or tell the user what is missing.` |
 
+Order note v1.2.0: real evaluation order is research-first guard, `cmd_fails`, `fails[key] >= 2` `[UNVERIFIED applied]`, `seen` duplicate, `missing_args`, execute. The `fails` row in the table above is listed out of order.
+
 `cmd_fails` increments when `run_command` output contains `is not recognized`, `SyntaxError`, `Traceback`, or `was unexpected`. It resets to 0 after a successful `write_file` ("wrote..."). 
 
 Change v1.1.0 `[UNVERIFIED applied]` in `run_agent`:
 - `seen` no longer permanent for failures: after a tool result starting `error:`, `seen.discard(key)` and `fails[key] += 1`. Lets legit retry after transient error. Cap 2 per identical call.
 - After successful `write_file` or `edit_file` (`wrote` / `edited`), `seen.clear()`. Lets model verify with `read_file` / `list_files`.
 - `missing_args` (tools.py) now treats `None` and `""` as missing: `[k for k in required if args.get(k) in (None, "")]`.
+
+Change v1.2.0 `[UNVERIFIED applied]`, forced research routing in `agent.py`:
+- Module level: `RESEARCH_RE = re.compile(r"\bresearch(?:ing)?\b", re.I)` and `wants_research(messages)`: finds last user message, strips the `[system: ...]` first line that `main.py` prepends, returns whether the regex matches.
+- In `run_agent`: `want_research = wants_research(messages)`, `researched = False`, `r_nudged = False`.
+- No-tool-call branch: if `want_research and not researched and not r_nudged` → append assistant text (if any) + user message `User asked for research. Call the research tool now. Do not answer from memory.` and `continue` (once per turn).
+- After `args = json.loads(...)`: if `want_research and name == "web_search"` → `name = "research"`, `args = {"query": args.get("query", "")}` (silent remap).
+- First guard gets `and not want_research` (research allowed without prior web_search).
+- On successful dispatch of `research`: `researched = True`.
+- Regex is loose: any message containing "research" forces research. Stricter variant offered: `\b(?:deep[- ]research|research(?:ing)?\s+(?:on|about|into|this|it|the|how|why|what|who|when|where)|(?:do|run|please|can you)\s+research)\b`.
+- Research failure is final: no fallback to `web_search`.
+
+Change v1.2.0: after successful `write_file`, `edit_file` or `delete_file` (result starts `wrote`, `edited`, `deleted`) → `seen.clear()`. `[UNVERIFIED applied]` for the `seen.clear()` line itself (delete_file itself works).
 
 Return value convention: strings beginning `error:` are shown red in `main.py` and are NOT spoken. Everything else is printed and spoken via `voice_out.speak`.
 
@@ -221,6 +263,9 @@ Defined in `tools_schema.py` (`TOOL_SCHEMAS`, OpenAI function format). Implement
 | `ingest_url(url)` | rag (async) | download page/PDF to workspace and index |
 | `remove_doc(source)` | rag | GATED (asks y/N) |
 | `ocr_image(filename)` | ocr_tool (async, special-cased in `call_tool` like `ingest_url`) | image in workspace (png jpg jpeg webp bmp). If name not found and exactly one image exists in workspace, uses that image. Else error lists real image names. Saves `<stem>.ocr.md`, cached by mtime. Runs `rag.ingest_doc` on it. Returns `DONE. OCR text saved to X.ocr.md, N chars. indexed: ... Preview: <300 chars>. Use search_docs or read_doc for details.` Full text NOT returned (context budget). |
+| `delete_file(filename)` | file_tools | files only, never folders. `safe_path` (workspace only). `path.unlink()`, then lazy `rag.remove_doc(filename)` (errors ignored) so index chunks go too. Returns `deleted: <name>`. Errors: `error: no file named X`, `error: X is not a file. Folders are not deleted.` GATED: user types `y`. No undo, no trash. |
+| `get_weather(location="", days=3)` | weather_tool (async, special-cased in `call_tool`) | current + daily forecast 1–7 days from Open-Meteo. Empty location = saved location (first use: IP lookup, saved to `location.json`). Named location = one-shot geocode, NOT saved. Output header names the place and location source. Errors: `error: location failed: ... Ask the user for a city name.`, `error: weather request failed: ...`. `[UNVERIFIED applied]` |
+| `find_places(category, near="", radius_km=2, limit=8)` | places_tool (async, special-cased) | OSM Overpass. `category` is a schema enum: restaurant cafe fast_food bar hospital pharmacy atm bank fuel hotel museum attraction park supermarket airport railway_station bus_station. Radius clamped 0.2–20 km, limit 1–15. Sorted by haversine distance. Unnamed elements skipped. Output: name, km, address, cuisine, hours, phone. No ratings (OSM has none). Errors: `error: unknown category`, `error: map server busy. Tell the user to retry in a minute.` (HTTP 429/504). `[UNVERIFIED applied]` |
 
 ### MCP tools (registered at runtime in `mcp_client.py`)
 - `get_current_time` from `mcp-server-time`.
@@ -230,10 +275,17 @@ Defined in `tools_schema.py` (`TOOL_SCHEMAS`, OpenAI function format). Implement
 ### Confirmation gating (`tools.py: GATED`)
 `browser_click`, `browser_type`, `browser_fill_form`, `browser_press_key`, `remove_doc` → `ask("Confirm ...? [y/N]")`. `run_command` has its own prompt. `interrupt.ask()` sets a threading event so the Esc watcher doesn't steal keystrokes during the prompt.
 
+Change v1.2.0: `GATED` now also contains `delete_file`. The decline text in `call_tool` changed from `The user declined this browser action` to `The user declined this action`.
+
 ### Dispatch order in `call_tool`
 GATED check → `research` → `ingest_url` → `LOCAL_TOOLS` → `browser_navigate` w/o url error → `browser_*` → other MCP via `mcp_session[name]` (output capped at 5000).
 
+Update v1.2.0: async special cases before `LOCAL_TOOLS` are now `research`, `ingest_url`, `ocr_image`, `get_weather`, `find_places`. `delete_file` is a sync entry in `LOCAL_TOOLS`.
+
 Change v1.1.0 `[UNVERIFIED applied]`: `mcp_client.py` gets `clean_schema()` (drops `$schema` and `additionalProperties`, ensures `type`, `properties`, `required`). `browser_navigate` schema forced to `required: ["url"]` with a `url` property. Tool descriptions cut to 200 chars. `tools.py` empty-url error text: `error: browser_navigate needs url. Resend exactly: {"url": "https://en.wikipedia.org/wiki/India"} with the real link.`
+
+
+
 ---
 
 ## 7. Research pipeline (`research_tool.py`)
@@ -286,6 +338,17 @@ Change v1.1.0 `[UNVERIFIED applied]`, added to `AGENT_RULES`:
 - Workflow triage: `Image or screenshot to read: ocr_image, then search_docs or read_doc.`
 - Rules: `Never invent file names. Copy names exactly from list_files. Not sure: call list_files.`
 - Tool schema for `ocr_image.filename`: description `File name copied exactly from list_files output.` (no example name, examples bias the model into copying them)
+
+Change v1.2.0, added to `AGENT_RULES` (all `[UNVERIFIED applied]` except delete_file line, which user confirmed working):
+- Tools list: `delete_file: delete one workspace file. User approves each call. Only when the user asks to delete. Copy the name exactly from list_files. Never delete to "clean up" on your own.`
+- Tools list, `research` line extended: `User says "research" or "deep research" in any form: ALWAYS this tool, never web_search.`
+- Workflow triage, FIRST bullet: `User says "research" or "deep research": call research first. Never web_search. This overrides the cheapest-path rule.`
+- Rules: `Explicit research request: web_search is forbidden for that turn. Several subjects: one research call per subject.`
+- Tools list: `get_weather: current weather and forecast. No location arg = user's saved location. Never web_search for weather.`
+- Triage: `Weather, temperature, rain, forecast: get_weather, then answer.`
+- Rules: `Weather answer: say which place it is for, using the place name from the tool result.`
+- Tools list: `find_places: nearby places by category, sorted by distance. No ratings. Empty near = saved location. Never web_search for "near me".`
+Schema text changes: `research` description says "Always use when the user says research or deep research."; `web_search` description appended "Never use when the user asks for research or deep research."
 
 ---
 
@@ -343,6 +406,10 @@ Behavioral and code conventions the project follows. Keep them when adding featu
 8. Colors via `c("<kind>", text)`; kinds: you, assistant, think, tool, result, error, info.
 9. Windows is the main target; keep cross-platform branches (`os.name == "nt"`) where they exist.
 10. Commented-out old code is left in place in several files (`agent.py`, `main.py`, `web_tool.py`, `research_tool.py`). It is history, not live code.
+11. Prefer `enum` parameters in schemas (e.g. `find_places.category`) so the small model cannot invent values.
+12. A prompt rule is a request, a code guard is a fact. Anything that must always happen (forced `research`, delete approval) lives in `agent.py` / `tools.py`, prompt only repeats it.
+13. Tool count is a budget. Every added tool lowers wrong-tool and empty-args reliability of the 9B model. See Section 13 item 30 and roadmap (tool routing).
+14. Location-aware tools resolve place in one order: explicit arg → saved `location.json` → IP lookup (then saved).
 
 ### Recipe: add a new tool
 1. Write function (sync returns `str`, or async and special-case in `call_tool`).
@@ -406,6 +473,14 @@ Ordered roughly by impact. Fix or acknowledge before piling on features.
 25. Brain model is text-only. "What is in this photo" unsupported. OCR gives text only. Switching brain to a VLM would need `image_url` content parts and breaks char-based `trim_history` / `budget` math (base64).
 26. Tool calling depends on model chat template under `llama-server --jinja`. Cell 5 prints `TOOL CALLS OK` or `TOOL CALLS FAILED`. Failed = do not run Ultron on that model.
 27. `torch_dtype="auto"` for GLM-OCR may pick bf16 on T4 (no native bf16). Sanity test passed. If garbage output, use `torch.float32`.
+28. `delete_file` has no undo and no trash. Only barrier is the `y/N` prompt, which shows `{'filename': ...}`. Prompt-injected documents/web pages can try to cause a delete; model can guess names (guess → `error: no file named X`, nothing deleted). `<stem>.ocr.md` from an image survives deleting the image and stays indexed under its own name; delete it separately.
+29. Location accuracy: IP geolocation is city/ISP-hub level. Indian ISPs often resolve to a hub city. `location.json` goes stale if user moves; no auto-refresh. Fix by `/loc <city>`. First IP lookup leaks public IP to ip-api.com.
+30. Tool count dilution: ~30+ tools (Playwright schemas are large). Wrong-tool and empty-args failures (items 21, 22) rise with each tool added. Not mitigated yet. Planned fix: tool routing in `agent.py` (core tools always, group tools only when user message keywords match or group used earlier in chat).
+31. OSM data via Overpass: no ratings/reviews, patchy small-shop coverage in India, public server rate limits (429/504). `find_places` is a nearby-lookup, not a review service.
+32. Forced research regex (`RESEARCH_RE`) is loose: "explain my research paper" also forces `research`. Each forced `research` costs 30–90 s plus embedding calls to Kaggle. `[UNVERIFIED applied]`
+33. Travel planning facts (checked 2026-11-15, web search): Amadeus Self-Service portal decommissioned 17 July 2026, keys deactivated (enterprise contracts only). Kiwi Tequila invitation-only. Skyscanner Flights API partner-gated. Duffel offers search + booking via self-serve signup but test mode returns sandbox data, not real fares. Scrape-style options (Google Flights actors on Apify, Ignav) exist, unofficial or vendor-claimed, free tiers unknown. No free official real-fare API for hobby use.
+34. Booking safety: letting the agent pay is NOT allowed by design (weak model, hallucinated args seen in items 21, 22, prompt injection, no undo). Agreed design: agent searches and returns options plus a deep link (Google Flights / airline URL from IATA codes + dates); human clicks and pays.
+
 ---
 
 ## 14. HOW TO UPDATE THIS DOCUMENT (instructions for any AI)
@@ -455,6 +530,7 @@ Compare to Section 3/6; list differences you found; then apply the procedure.
 |---|---|---|---|
 | 1.0.0 | 2026-11-15 | Initial doc generated from full codebase upload (20 files) | all |
 | 1.1.0 | 2026-11-15 | Added OCR (`ocr_tool.py`, `ocr_image`, async job API on Kaggle, image branch in `rag._extract`). New Kaggle notebook `ultron_kaggle_server.ipynb`: llama.cpp `llama-server --jinja`, GGUF/safetensors/model-id loader, 2-GPU split, CUDA 13 workarounds. Agent guard changes `[UNVERIFIED applied]`, browser schema cleanup `[UNVERIFIED applied]`, prompt additions `[UNVERIFIED applied]`. Known issues 19–27 added. | 2, 3, 4, 5, 6, 8, 9, 10.1, 13, 16.1 |
+| 1.2.0 | 2026-11-15 | Added `delete_file` (file_tools, GATED, schema, prompt). Forced research routing in `agent.py` `[UNVERIFIED applied]`. Added `weather_tool.py` (`get_weather`, location helpers, `/loc` command, `location.json`) `[UNVERIFIED applied]`. Added `places_tool.py` (`find_places`, OSM Overpass) `[UNVERIFIED applied]`. Documented travel-search API landscape and no-agent-booking decision. Fixed 1.1.0 paste slips (stray changelog row, missing 16.1, guard order note). Known issues 28–34 added. | 3, 4, 5, 6, 9, 11, 13, 16.1–16.4, 17 |
 <!-- APPEND NEW CHANGELOG ROWS ABOVE THIS LINE, KEEP TABLE FORMAT -->
 
 ---
@@ -462,7 +538,48 @@ Compare to Section 3/6; list differences you found; then apply the procedure.
 ## 16. Reserved: new sections go here (numbered 16+ as needed)
 
 <!-- AIs: add new feature sections below this line, one `## N. Title` per feature -->
-| 1.1.0 | 2026-11-15 | Added OCR (`ocr_tool.py`, `ocr_image`, async job API on Kaggle, image branch in `rag._extract`). New Kaggle notebook `ultron_kaggle_server.ipynb`: llama.cpp `llama-server --jinja`, GGUF/safetensors/model-id loader, 2-GPU split, CUDA 13 workarounds. Agent guard changes `[UNVERIFIED applied]`, browser schema cleanup `[UNVERIFIED applied]`, prompt additions `[UNVERIFIED applied]`. Known issues 19–27 added. | 2, 3, 4, 5, 6, 8, 9, 10.1, 13, 16.1 |
+
+## 16.1 OCR (v1.1.0)
+
+Server (Kaggle, `embed_server.py`, same tunnel as embeddings):
+- `POST /v1/ocr/start` body `{image: <base64>, prompt: "Text Recognition:", max_new_tokens: 1024}` → `{id}`. Starts background thread, returns at once (avoids 120 s tunnel limit).
+- `GET /v1/ocr/{id}` → `{status: "running"}` | `{status: "done", text}` | `{status: "error", error}` | `{status: "missing"}`.
+- Model `zai-org/GLM-OCR`, preloaded in a thread at server start, one job at a time (`threading.Lock`), `thumbnail((MAX_SIDE, MAX_SIDE))`, `torch.cuda.empty_cache()` in `finally`. Job store keeps last 50.
+- `/v1/embeddings` unchanged (bge-small, CPU).
+
+Client (`ocr_tool.py`):
+- `ocr_file_sync(path, prompt="Text Recognition:")`: `_prep` (EXIF transpose, RGB, downscale to `OCR_MAX_SIDE`, JPEG q90, base64) → POST `/start` (3 tries, 2 s apart; 404 → "OCR route missing on server. Re-run Kaggle embed_server cell.") → poll every 3 s up to `OCR_JOB_TIMEOUT`. Poll network errors ignored (tunnel blips). `status=error` containing `OutOfMemory` → RuntimeError telling model not to retry. `status=missing` → "OCR job lost, server restarted?".
+- `ocr_image(filename)` async tool. Steps: `safe_path`; file check with single-image auto-pick; extension check; cache `<stem>.ocr.md` (reuse if newer than image); else `asyncio.to_thread(ocr_file_sync)`; empty text → `error: no text found in X.`; write `.ocr.md`; lazy `from rag import ingest_doc`; return `DONE...` with 300-char preview.
+- Rule: OCR text goes to file + RAG, not chat. History budget is `len(system) + 12000` chars; one dense page is 3–6k chars.
+
+Limits: text only, no layout stage, no scanned-PDF OCR, needs Kaggle session alive.
+
+## 16.2 Weather and location (v1.2.0)
+
+Files: `weather_tool.py`, `config.LOCATION_FILE`, `/loc` in `main.py`.
+- `load_location()` / `save_location(loc)`: JSON file `location.json`, shape `{name, lat, lon, tz, source}`; `source` is `ip` or `manual`.
+- `geocode(place)`: Open-Meteo geocoding, top 10 results, splits input on commas; first part is the name query, later parts must appear in `admin1/admin2/country` of the chosen hit (else first result). Raises `ValueError("place not found: X")`.
+- `ip_location()`: `ip-api.com` (fields status,message,city,regionName,country,lat,lon,timezone), fallback `ipapi.co`. Raises `ValueError` with last reason.
+- `get_weather(location="", days=3)`: `days` clamped 1–7. Location order: arg (geocode, not saved) → saved file → IP (saved). Calls Open-Meteo `current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m`, `daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max`, `timezone=auto`. WMO code → text via `WMO` dict. Units: C, km/h, mm. Output starts with `Weather for <place> (location source: <src>), timezone <tz>`.
+- Not injected into system prompt and not in `memory.md`.
+
+## 16.3 Nearby places (v1.2.0)
+
+File: `places_tool.py`. `find_places(category, near="", radius_km=2, limit=8)`.
+- `OSM` dict maps category → tag (`amenity=restaurant`, `tourism=hotel`, `leisure=park`, `shop=supermarket`, `aeroway=aerodrome`, `railway=station`, ...).
+- Query: `[out:json][timeout:25];nwr["k"="v"](around:<m>,<lat>,<lon>);out center tags 80;` via POST `data=`. Ways/relations use `center`.
+- `_where(near)`: same location resolution order as weather (arg → saved → IP, saved).
+- Output header: `<category> near <place> (location source: ...), within <r> km. Source OpenStreetMap, no ratings.` then numbered lines.
+- Empty result text: `No <category> found within <r> km of <place> in map data. Try a bigger radius.`
+
+## 16.4 Travel: flights and other places (PLANNED v1.2.0, nothing built)
+
+Decision log:
+- Search + deep link only. No in-agent booking (Section 13 items 33, 34).
+- If in-agent booking is ever added: Duffel, hard confirm showing itinerary + price + passenger, user retypes amount. Needs account and live-access onboarding; terms unverified.
+- Flight search source still undecided (Section 13 item 33). Deep-link builder needs IATA codes + dates, no API.
+- Places beyond nearby lookup (ratings, details) would need Google Places or Foursquare: key + billing + terms, not evaluated.
+
 ---
 
 ## 17. Roadmap / planned features (append only)
@@ -475,6 +592,12 @@ Compare to Section 3/6; list differences you found; then apply the procedure.
 - [ ] OCR layout stage (PP-DocLayoutV3 / official SDK) for dense pages
 - [ ] Verify and remove `[UNVERIFIED applied]` tags (agent guards, browser schema, prompt lines)
 - [ ] Token-based history budget (replace char budget)
+- [ ] Tool routing in `agent.py`: core tools always, group tools (browser, travel, places, weather, docs, ocr) only on keyword match or earlier use this chat. Fixes tool-count dilution (Section 13 item 30)
+- [ ] After routing: one file per tool (`tools/<name>.py`: function + schema + prompt line) with auto-registry, so adding a tool is not 4 file edits
+- [ ] Travel: flight search source decision, deep-link builder (`search_flights` returns options + URL), no booking
+- [ ] Verify and remove `[UNVERIFIED applied]` tags: forced research, weather/location, places, `/loc`
+- [ ] Tighten `RESEARCH_RE` if false positives appear
+- [ ] Optional precise location via Windows Location API (needs OS permission, API not verified)
 <!-- Mark done as `- [x] ... (vX.Y.Z)`, never delete items. -->
 
 ---

@@ -30,6 +30,15 @@ BROWSER_ALLOWED = {"browser_navigate", "browser_snapshot", "browser_click",
                    "browser_type", "browser_fill_form", "browser_press_key",
                    "browser_wait_for"}
 
+def clean_schema(s) -> dict:
+    s = dict(s or {})
+    s.pop("$schema", None)
+    s.pop("additionalProperties", None)
+    s.setdefault("type", "object")
+    s.setdefault("properties", {})
+    s.setdefault("required", [])
+    return s
+
 async def connect_browsers(stack: AsyncExitStack):
     registered = False
     for mode, params in BROWSER_SERVERS.items():
@@ -48,9 +57,12 @@ async def connect_browsers(stack: AsyncExitStack):
         for tool in tools:
             if tool.name not in BROWSER_ALLOWED:
                 continue
-            schema = getattr(tool, "inputSchema", None) or {"type": "object", "properties": {}}
+            schema = clean_schema(getattr(tool, "inputSchema", None))
+            if tool.name == "browser_navigate":
+                schema["properties"].setdefault("url", {"type": "string", "description": "Full link starting with https://"})
+                schema["required"] = ["url"]
             TOOL_SCHEMAS.append({"type": "function", "function": {
-                "name": tool.name, "description": tool.description or "", "parameters": schema}})
+                "name": tool.name, "description": (tool.description or "")[:200], "parameters": schema}})
         registered = True
         print(f" [mcp] browser tools registered: {[t.name for t in tools if t.name in BROWSER_ALLOWED]}")
 
