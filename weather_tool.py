@@ -2,6 +2,13 @@ import json
 import httpx
 from config import LOCATION_FILE
 
+import asyncio
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
 WMO = {0: "clear", 1: "mostly clear", 2: "partly cloudy", 3: "overcast",
        45: "fog", 48: "rime fog",
        51: "light drizzle", 53: "drizzle", 55: "heavy drizzle",
@@ -83,10 +90,7 @@ async def get_weather(location: str = "", days: int = 3) -> str:
         if location.strip():
             loc = await geocode(location)
         else:
-            loc = load_location()
-            if not loc:
-                loc = await ip_location()
-                save_location(loc)
+            loc = await saved_or_detect()
     except Exception as e:
         return f"error: location failed: {e}. Ask the user for a city name."
     params = {
@@ -101,7 +105,7 @@ async def get_weather(location: str = "", days: int = 3) -> str:
         d = r.json()
         cur, day = d["current"], d["daily"]
         lines = [
-            f"Weather for {loc['name']} (location source: {loc['source']}), timezone {d.get('timezone', '')}",
+            f"Weather for {loc['name']} (location source: {loc['source']}{', accuracy +-' + str(loc['acc_m']) + ' m' if loc.get('acc_m') else ''})",
             f"Now: {cur['temperature_2m']}C (feels {cur['apparent_temperature']}C), "
             f"{WMO.get(cur['weather_code'], 'code ' + str(cur['weather_code']))}, "
             f"humidity {cur['relative_humidity_2m']}%, wind {cur['wind_speed_10m']} km/h, "
@@ -118,3 +122,63 @@ async def get_weather(location: str = "", days: int = 3) -> str:
         return f"error: unexpected weather response: {type(e).__name__}: {e}"
     except Exception as e:
         return f"error: weather request failed: {type(e).__name__}: {e}"
+
+async def reverse(lat: float, lon: float) -> str:
+    try:
+        async with httpx.AsyncClient(timeout=10) as h:
+            r = await h.get("https://nominatim.openstreetmap.org/reverse",
+                            params={"lat": lat, "lon": lon, "format": "jsonv2", "zoom": 17},
+                            headers={"User-Agent": "UltronAgent/1.0"})
+        a = r.json().get("address", {})
+        area = next((a[k] for k in ("suburb", "neighbourhood", "city_district", "city", "town", "village") if a.get(k)), "")
+        parts = [a.get("road", ""), area, a.get("state", ""), a.get("country", "")]
+        name = ", ".join(p for p in parts if p)
+        if name:
+            return name
+    except Exception:
+        pass
+    return f"{lat:.5f}, {lon:.5f}"
+
+
+async def precise_location() -> dict:
+    if os.name != "nt":
+        raise ValueError("precise location only works on Windows")
+    helper = Path(__file__).parent / "loc_win.ps1"
+    try:
+        r = await asyncio.to_thread(
+            subprocess.run,
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(helper)],
+            capture_output=True, text=True, timeout=40)
+    except subprocess.TimeoutExpired:
+        raise ValueError("location timed out. Turn on Location services in Windows Settings.")
+    except FileNotFoundError:
+        raise ValueError("powershell not found in PATH.")
+    try:
+        d = json.loads(r.stdout.strip().splitlines()[-1])
+    except Exception:
+        raise ValueError("location helper failed: " + (r.stderr or r.stdout or "no output")[-200:])
+    err = d.get("error")
+    if err in ("denied", "disabled"):
+        raise ValueError("Windows blocked location. Settings > Privacy & security > Location: Location services ON and desktop apps allowed.")
+    if err == "unknown":
+        raise ValueError("Windows has no position fix yet. Wait a few seconds and retry.")
+    if err:
+        raise ValueError(str(err))
+    acc = d.get("acc")
+    acc_m = round(acc) if isinstance(acc, (int, float)) and acc == acc else None
+    return {"name": await reverse(d["lat"], d["lon"]), "lat": d["lat"], "lon": d["lon"],
+            "tz": "", "source": "windows", "acc_m": acc_m, "ts": time.time()}
+
+
+async def saved_or_detect() -> dict:
+    loc = load_location()
+    if loc and loc.get("source") == "windows" and time.time() - loc.get("ts", 0) > 600:
+        try:
+            loc = await precise_location()
+            save_location(loc)
+        except Exception:
+            pass
+    if not loc:
+        loc = await ip_location()
+        save_location(loc)
+    return loc

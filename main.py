@@ -16,7 +16,7 @@ from config import WORKSPACE
 from rag import ingest_doc, ingest_url, list_docs, remove_doc, upload_doc
 from interrupt import run_cancellable
 from text_ui import c, read_you
-from weather_tool import load_location, save_location, ip_location, geocode
+from weather_tool import load_location, save_location, ip_location, geocode, precise_location
 
 STOP_WORDS = {"stop", "/stop", "quiet", "enough", "shut up"}
 
@@ -94,7 +94,15 @@ async def main():
                                 print(f"{loc['name']} ({loc['source']})" if loc
                                       else "no location saved. Use /loc auto or /loc <city>")
                                 continue
-                            loc = await ip_location() if arg == "auto" else await geocode(arg)
+                            if arg == "auto":
+                                loc = await ip_location()
+                            elif arg == "here":
+                                loc = await precise_location()
+                            else:
+                                loc = await geocode(arg)
+                            save_location(loc)
+                            acc = f", +-{loc['acc_m']} m" if loc.get("acc_m") else ""
+                            print(f"location saved: {loc['name']} ({loc['source']}{acc})")
                             save_location(loc)
                             print(f"location saved: {loc['name']} ({loc['source']})")
                         except Exception as e:

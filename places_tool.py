@@ -1,6 +1,6 @@
 import math
 import httpx
-from weather_tool import load_location, save_location, ip_location, geocode
+from weather_tool import saved_or_detect, geocode
 
 OSM = {
     "restaurant": "amenity=restaurant", "cafe": "amenity=cafe", "fast_food": "amenity=fast_food",
@@ -23,11 +23,7 @@ def _km(a_lat, a_lon, b_lat, b_lon) -> float:
 async def _where(near: str) -> dict:
     if near.strip():
         return await geocode(near)
-    loc = load_location()
-    if not loc:
-        loc = await ip_location()
-        save_location(loc)
-    return loc
+    return await saved_or_detect()
 
 
 async def find_places(category: str, near: str = "", radius_km: float = 2, limit: int = 8) -> str:
