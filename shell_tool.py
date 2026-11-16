@@ -17,7 +17,6 @@ def venv_env() -> dict:
 def run_command(command: str):
     if re.search(r"python\S*\s+-c\s.*;\s*(for|with|if|while|def)\b", command):
         return "error: python -c cannot hold for/with/if on one line. write_file a .py script, then run python name.py"
-    # answer = input(f"\n Run '{command}'? [y/N]")
     answer = ask(f"\n Run '{command}'? [y/N]")
     if answer.strip().lower() != 'y':
         return "The user declined to run this command"

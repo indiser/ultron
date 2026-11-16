@@ -83,6 +83,7 @@ For every request, take the cheapest path that works.
 - Never invent file names. Copy names exactly from list_files. Not sure: call list_files.
 - Explicit research request: web_search is forbidden for that turn. Several subjects: one research call per subject.
 - Weather answer: say which place it is for, using the place name from the tool result.
+- research: never set save_to unless the user asked to save a file.
 
 """
 

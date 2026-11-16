@@ -49,12 +49,10 @@ async def main():
                     today=date.today().isoformat(),
                     shell="Windows cmd.exe" if os.name == "nt" else "bash")}
             ]
-            # print("\nUltron")
             print(c("info", "\nUltron"))
             pending = []
             try:
                 while True:
-                    # user = input("\nyou: ")
                     user = read_you()
                     cmd = user.strip()
                     if cmd.lower().strip(" .!") in STOP_WORDS:
@@ -109,26 +107,19 @@ async def main():
                     voice_out.stop()
                     n = len(messages)
                     messages.append({"role": "user", "content": user})
-                    # print(" [Esc = cancel]")
                     print(c("think", " [Esc = cancel]"))
                     answer, cancelled = await run_cancellable(run_agent(messages))
                     if cancelled:
                         del messages[n:]
                         pending.extend(held)
                         voice_out.stop()
-                        # print("\n [cancelled]")
                         print(c("info", "\n [cancelled]"))
                         continue
-                    # answer = await run_agent(messages)
-                    # print(f"\nAssistant: {answer}")
-                    # if not answer.startswith("error:"):
-                    #     voice_out.speak(answer)
                     if answer.startswith("error:"):
                         print("\n" + c("error", answer))
                     else:
                         print("\n" + c("assistant", "Assistant: " + answer))
                         voice_out.speak(answer)
-                    # voice_out.speak(answer)
             except (EOFError, KeyboardInterrupt):
                 print("\nbye")
     finally:

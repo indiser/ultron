@@ -7,16 +7,24 @@ import traceback
 from text_ui import c
 import re
 
-RESEARCH_RE = RESEARCH_RE = re.compile(r"\b(?:deep[- ]research|research(?:ing)?\s+(?:on|about|into|this|it|the|how|why|what|who|when|where)|(?:do|run|please|can you)\s+research)\b", re.I)
+RESEARCH_RE = re.compile(r"\b(?:deep[- ]research|research(?:ing)?\s+(?:on|about|into|this|it|the|how|why|what|who|when|where)|(?:do|run|please|can you)\s+research)\b|^\s*research\b", re.I)
+FILE_RE = re.compile(r"\b(?:save|file|csv|txt|download|export)\b|\.(?:txt|csv|md)\b", re.I)
+NUDGE = "[nudge] "
 
-def wants_research(messages: list) -> bool:
+
+def last_user(messages: list) -> str:
     for m in reversed(messages):
         if isinstance(m, dict) and m.get("role") == "user":
-            text = m.get("content") or ""
-            if text.startswith("[system:"):
-                text = text.split("\n", 1)[-1]
-            return bool(RESEARCH_RE.search(text))
-    return False
+            t = m.get("content") or ""
+            if t.startswith("[system:"):
+                t = t.split("\n", 1)[-1]
+            return t
+    return ""
+
+
+def purge_nudges(messages: list) -> None:
+    messages[:] = [m for m in messages
+                   if not (isinstance(m, dict) and str(m.get("content") or "").startswith(NUDGE))]
 
 MAX_STEPS = 40
 RESULT_CAP = 8000
@@ -49,7 +57,10 @@ async def run_agent(messages: list) -> str:
     nudged = False
     searched = False
     seen = set()
-    want_research = wants_research(messages)
+    purge_nudges(messages)
+    user_text = last_user(messages)
+    want_research = bool(RESEARCH_RE.search(user_text))
+    want_file = bool(FILE_RE.search(user_text))
     researched = False
     r_nudged = False
     fails = {}
@@ -71,7 +82,6 @@ async def run_agent(messages: list) -> str:
             body = getattr(getattr(e, "response", None), "text", "")
             return f"error: model call failed: {e} {body[:800]}"
     
-        # print(f" [llm] {time.time() - t:.1f}s")
         print(c("think", f" [llm] {time.time() - t:.1f}s"))
         message = response.choices[0].message
     
@@ -81,11 +91,11 @@ async def run_agent(messages: list) -> str:
                 r_nudged = True
                 if text.strip():
                     messages.append({"role": "assistant", "content": text})
-                messages.append({"role": "user", "content": "User asked for research. Call the research tool now. Do not answer from memory."})
+                messages.append({"role": "user", "content": NUDGE + f"Research request: {user_text[:300]}. Call the research tool now with a query taken from that request. Do not answer from memory."})
                 continue
             if not text.strip() and not nudged:
                 nudged = True
-                messages.append({"role": "user", "content": "Answer now, briefly, from the tool results above."})
+                messages.append({"role": "user", "content": NUDGE + "Answer now, briefly, from the tool results above."})
                 continue
             if not text.strip():
                 text = "(model returned an empty reply)"
@@ -101,7 +111,10 @@ async def run_agent(messages: list) -> str:
                 if want_research and name == "web_search":
                     name = "research"
                     args = {"query": args.get("query", "")}
-                # print(f" [tool] {name}({args})")
+                if name == "research":
+                    researched = True
+                    if args.get("save_to") and not want_file:
+                        args.pop("save_to")
                 print(c("tool", f" [tool] {name}({args})"))
                 key = (name, json.dumps(args, sort_keys=True))
                 if name == "research" and not searched and not args.get("save_to") and not want_research:
@@ -125,20 +138,16 @@ async def run_agent(messages: list) -> str:
                     if result.startswith("error:"):
                         seen.discard(key)
                         fails[key] = fails.get(key, 0) + 1
-                    if result.startswith("error:"):
-                        seen.discard(key)
                     if name in ("write_file", "edit_file", "delete_file") and result.startswith(("wrote", "edited", "deleted")):
                         seen.clear()
                     if name == "write_file" and result.startswith("wrote"):
                         cmd_fails = 0
                     if name == "run_command" and any(s in result for s in ("is not recognized", "SyntaxError", "Traceback", "was unexpected")):
                         cmd_fails += 1
-                # print(f" [result] {result[:300]}")
                 print(c("result", f" [result] {result[:300]}"))
             except Exception as e:
                 traceback.print_exc()
                 result = f"error: {type(e).__name__}: {e}"
-                # print(f" [error] {result}")
                 print(c("error", f" [error] {result}"))
             messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
             errs = errs + 1 if result.startswith("error:") else 0

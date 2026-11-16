@@ -37,7 +37,7 @@ def edit_file(filename: str, old: str, new: str) -> str:
     path.write_text(text.replace(old, new, 1), encoding="utf-8")
     return f"edited: {filename}"
 
-#Delete a File
+# Delete a File
 def delete_file(filename: str) -> str:
     try:
         path = safe_path(filename)

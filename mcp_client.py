@@ -50,7 +50,6 @@ async def connect_browsers(stack: AsyncExitStack):
         except Exception as e:
             print(f" [mcp] FAILED: browser {mode}: {type(e).__name__}: {e}")
             continue
-        # print(f" [mcp] browser {mode} offers: {[t.name for t in tools]}")
         browser_sessions[mode] = session
         if registered:
             continue

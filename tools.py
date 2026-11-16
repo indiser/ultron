@@ -43,7 +43,6 @@ GATED = {"browser_click", "browser_type", "browser_fill_form", "browser_press_ke
 # Call tools mcp or local as nesessary
 async def call_tool(name: str, args: dict) -> str:
     if name in GATED:
-        # if input(f"\n Browser {name} {args}? [y/N] ").strip().lower() != "y":
         if ask(f"\n Confirm {name} {args}? [y/N] ").strip().lower() != "y":
             return "The user declined this action"
     if name == "research":

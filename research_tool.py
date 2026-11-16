@@ -167,6 +167,9 @@ async def research(query: str, save_to: str = "", top_k: int = 3) -> str:
         return "error: no search results"
     texts = await asyncio.gather(*(fetch_page(r["href"]) for r in cand))
     pages = []
+    for r, t in zip(cand, texts):
+        print(f" [research] fetched {len(t)} chars {r['href']}")
+
     for rank, (r, t) in enumerate(zip(cand, texts)):
         if len(t) < 300:
             continue
@@ -187,8 +190,6 @@ async def research(query: str, save_to: str = "", top_k: int = 3) -> str:
     need = max(5, int(want * 0.8))
     if save_to:
         for p in pages:
-            # items = next((c for c in (extract_table_rows(p["text"]), extract_items(p["text"]))
-            #               if len(c) >= need), [])
             items = next((c for c in (extract_table_rows(p["text"]), extract_items(p["text"]),
                         extract_timeline_rows(p["text"]))
                           if len(c) >= need), [])
@@ -204,7 +205,6 @@ async def research(query: str, save_to: str = "", top_k: int = 3) -> str:
                 items = items[:want]
             print(f" [research] {len(items)} numbered items (need {need}) {p['url']}")
             if len(items) >= need:
-                # out = "\n".join(f"{i + 1}. {n}" for i, n in enumerate(items))
                 if save_to.lower().endswith(".csv"):
                     rows = []
                     for i, it in enumerate(items):
