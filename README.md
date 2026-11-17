@@ -31,7 +31,10 @@ main.py
         │     │     └── upload_ui.py      ← Tkinter file picker window
         │     ├── ocr_tool.py       ← async OCR pipeline (image → text → RAG)
         │     ├── weather_tool.py   ← weather + forecast (Open-Meteo) + location helpers
+        │     │     └── loc_win.ps1       ← Windows Location API (precise GPS via PowerShell)
         │     ├── places_tool.py    ← nearby places (OpenStreetMap Overpass)
+        │     ├── skills_tool.py    ← skill loader, embedding-based auto-router, use_skill
+        │     │     └── skills_install.py ← GitHub skill installer with integrity verification
         │     ├── mem_tools.py      ← persistent memory (memory.md)
         │     └── mcp_client.py     ← MCP servers (time, Scrapling) + Playwright browser
         └── voice_out.py            ← offline TTS pipeline (PocketTTS + sentence streaming)
@@ -60,7 +63,7 @@ Document intelligence backed by ChromaDB. Supports ingesting PDFs, DOCX, plain t
 Reads text from image files in the workspace (PNG, JPG, JPEG, WEBP, BMP). Images are preprocessed with Pillow — EXIF rotation corrected, resized to a max side of 2000px, and JPEG-encoded — then sent as base64 to an async job queue on the remote embedding server (`EMBED_BASE_URL/ocr`). The pipeline polls for completion, writes the extracted text to `<name>.ocr.md`, and immediately indexes it into the RAG store. Results are cached on disk: if the `.ocr.md` file is newer than the source image, the server is not called again. Requires `EMBED_BASE_URL` to be set.
 
 **Weather** (`weather_tool.py`)
-Fetches current conditions and up to 7-day forecasts from Open-Meteo — no API key required. Location is resolved in priority order: explicit argument → saved `location.json` → IP geolocation (cached on first use). Geocoding uses the Open-Meteo geocoding API. IP lookup tries `ip-api.com` with a fallback to `ipapi.co`. The `/loc` slash command lets you set, view, or auto-detect your location without invoking the agent.
+Fetches current conditions and up to 7-day forecasts from Open-Meteo — no API key required. Location is resolved in priority order: explicit argument → saved `location.json` → IP geolocation (cached on first use). Geocoding uses the Open-Meteo geocoding API. IP lookup tries `ip-api.com` with a fallback to `ipapi.co`. A third source is available on Windows: `precise_location()` calls `loc_win.ps1` via PowerShell to read the Windows Location API, returning GPS-level coordinates with accuracy in metres. Reverse geocoding via Nominatim converts raw coordinates to a human-readable address. Windows-sourced locations auto-refresh after 10 minutes. The `/loc` slash command lets you set, view, auto-detect, or precisely locate without invoking the agent.
 
 **Nearby Places** (`places_tool.py`)
 Finds nearby points of interest via the OpenStreetMap Overpass API — no API key, no ratings. Supports 17 categories (restaurants, hospitals, ATMs, hotels, parks, airports, etc.). Results are sorted by haversine distance from the user's location. Uses the same location resolution stack as the weather tool.
@@ -84,8 +87,13 @@ Tools are dynamically registered into the LLM's tool schema at runtime.
 **Terminal UI** (`text_ui.py` + `interrupt.py`)
 Two small quality-of-life modules. `text_ui.py` applies ANSI 256-colour theming to every output category — your input, the assistant's reply, tool calls, results, errors, and status lines — with a `NO_COLOR` env escape hatch. `interrupt.py` runs a background thread on Windows that watches for an Esc keypress and cancels the in-flight agent coroutine via `asyncio.CancelledError`, cleanly rolling back the message history and pending RAG state so the conversation is left intact. Stop words (`stop`, `quiet`, `shut up`, etc.) typed as input also halt speech immediately without invoking the agent.
 
+**Skills System** (`skills_tool.py` + `skills_install.py` + `skills/`)
+A hot-loadable plugin system that injects domain-specific instructions into the system prompt at runtime. Skills are markdown files with YAML front matter (`name`, `description`, `body`) stored in `skills/<name>/SKILL.md`. At startup, all skills are loaded and their descriptions are embedded. On each user message, `route()` computes cosine similarity between the query and every skill description — if the best match exceeds a 0.55 threshold, that skill activates automatically and its instructions are appended to the system prompt for that turn. The agent can also call `use_skill` explicitly.
+
+`skills_install.py` handles installing skills from GitHub. It downloads the repo as a zip, validates the SKILL.md front matter, enforces size limits (30 MB zip, 5 MB unpacked, 100 files), rejects binary and symlink entries, shows the user the skill description and instructions, and requires explicit `y/N` approval before writing to disk. A SHA-256 tree hash is stored in `.source.json` on install; if any file changes after install the skill is skipped on load as tampered. Skills can be removed via `/skill remove <name>`.
+
 **Persona** (`Sys_Prompt.txt`)
-The active system prompt defining identity, voice, humor rules, safety floor, and security robustness. Composed with agent tool rules at runtime via `build_prompt()` in `SYSTEM_PROMPT.py`. The persona is a costume. Competence is not optional.
+The active system prompt defining identity, voice, humor rules, safety floor, and security robustness. Composed with agent tool rules and the installed skills list at runtime via `build_prompt()` in `SYSTEM_PROMPT.py`. The persona is a costume. Competence is not optional.
 
 **Speech Input (external)**
 Ultron has no built-in STT. Voice input is currently handled by [Wispr Flow](https://wisprflow.ai), which transcribes speech system-wide and types the result into the terminal. It works, but it phones home. The planned replacement is [Handy](https://github.com/handyai/handy) — a fully offline STT tool with the same system-wide injection behaviour, keeping the entire pipeline air-gapped.
@@ -145,7 +153,11 @@ These are handled directly in the input loop, outside the agent:
 | `/remove <filename>` | Remove a document from the RAG store |
 | `/loc` | Show the currently saved location |
 | `/loc auto` | Re-detect location via IP and save it |
+| `/loc here` | Use Windows Location API for precise GPS coordinates |
 | `/loc <city>` | Geocode a city and save it as the active location |
+| `/skills` | List all installed skills |
+| `/skill add <source>` | Install a skill from GitHub (owner/repo or URL) |
+| `/skill remove <name>` | Remove an installed skill |
 
 ---
 
@@ -171,6 +183,8 @@ These are handled directly in the input loop, outside the agent:
 | `ocr_image` | Extract text from an image, save as `.ocr.md`, and index it |
 | `get_weather` | Current weather and up to 7-day forecast via Open-Meteo |
 | `find_places` | Nearby places by category via OpenStreetMap, sorted by distance |
+| `use_skill` | Activate an installed skill by name |
+| `install_skill` | Install a skill from a GitHub repo (user approval required) |
 | `set_browser_mode` | Switch browser between headless and visible |
 | `browser_navigate` | Navigate to a URL |
 | `browser_snapshot` | Capture the current page state |
@@ -194,7 +208,8 @@ This is version 0.1.0. It is a proof of concept, not a production system.
 - The RAG store is a local ChromaDB instance. It persists across sessions but has no access control.
 - The workspace is a single flat directory with no permissions model beyond a path check.
 - OCR requires the remote embedding server to be running. It will fail if `EMBED_BASE_URL` is not set.
-- Weather and places use free public APIs with no authentication. IP geolocation on first use sends your public IP to `ip-api.com` once; result is cached in `location.json`.
+- Weather and places use free public APIs with no authentication. IP geolocation on first use sends your public IP to `ip-api.com` once; result is cached in `location.json`. `/loc here` uses the Windows Location API which may use Wi-Fi/GPS and requires Location Services to be enabled in Windows Settings.
+- Skills are installed from GitHub and their instructions are injected into the system prompt. A tamper-check (SHA-256 tree hash) prevents modified skills from loading, but review skill instructions before installing.
 - `delete_file` is permanent. There is no trash, no undo. The only barrier is a `y/N` prompt.
 - Browser actions that mutate state require user approval, but the approval prompt is a simple `y/N` in the terminal.
 - Error handling is functional but not exhaustive.
@@ -211,11 +226,11 @@ This is version 0.1.0. It is a proof of concept, not a production system.
 - **GUI / web interface** — a minimal frontend so this isn't terminal-only
 - **Local LLM fallback** — automatic failover to a local model when the remote backend is unreachable
 - **Tool sandboxing** — run `run_command` inside a Docker container or Windows sandbox instead of the host shell
-- **Tool routing** — activate tool groups (browser, weather, places, docs, OCR) only when the user's message matches relevant keywords, reducing wrong-tool failures as the tool count grows
+- **Tool routing** — activate tool groups (browser, weather, places, docs, OCR) only when the user's message matches relevant keywords, reducing wrong-tool failures as the tool count grows (the skills system already does this for skills via embedding similarity)
 - **Multi-agent** — spawn sub-agents for parallelizable research tasks instead of sequential tool calls
 - **Persistent sessions** — save and restore full conversation history across restarts
 - **Wake word** — always-on microphone with a wake word to trigger the agent without typing
-- **Plugin system** — hot-loadable tool modules without restarting the agent
+- **Plugin system** — skills cover prompt-level plugins; the next step is hot-loadable *tool* modules that register new tool schemas without restarting
 - **Emotion-aware TTS** — modulate voice tone based on response content using the emotion vector API
 
 ---
@@ -226,6 +241,7 @@ Core: `openai`, `mcp`, `ddgs`, `scrapling`, `sentence-transformers`, `numpy`, `p
 RAG: `chromadb`, `pypdf`, `python-docx`
 OCR: `pillow`, `httpx`
 Weather/Places: `httpx`
+Skills: `pyyaml`
 Browser: `@playwright/mcp` (via npx), `obscura`
 Audio: `sounddevice`, `soundfile`, `pocket-tts`, `torch`
 Runtime: `uv` (Python 3.14+)
