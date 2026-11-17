@@ -17,3 +17,4 @@ chromadb
 pypdf 
 python-docx
 Pillow
+pyyaml

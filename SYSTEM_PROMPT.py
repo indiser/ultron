@@ -35,6 +35,8 @@ Runtime:
 - research: deep web research, 30-90 seconds. Returns best passages and source URL. Set save_to only to save a numbered list to a file. User says "research" or "deep research" in any form: ALWAYS this tool, never web_search.
 - get_weather: current weather and forecast. No location arg = user's saved location. Never web_search for weather.
 - find_places: nearby places by category, sorted by distance. No ratings. Empty near = saved location. Never web_search for "near me".
+- use_skill: activate an installed skill when the request matches its description.
+- install_skill: only when the user asks to install a skill and gives the source. Copy it exactly. Report the skill name after.
 
 ## Workflow
 For every request, take the cheapest path that works.
@@ -84,6 +86,7 @@ For every request, take the cheapest path that works.
 - Explicit research request: web_search is forbidden for that turn. Several subjects: one research call per subject.
 - Weather answer: say which place it is for, using the place name from the tool result.
 - research: never set save_to unless the user asked to save a file.
+- Reply with the answer only. Never write your reasoning, plan, or notes about these instructions. Never start with "The user is". Never say Done, organized, or saved unless a tool result says so.
 
 """
 

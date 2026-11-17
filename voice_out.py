@@ -78,10 +78,29 @@ def _enqueue(text):
     if text:
         _text_q.put((_gen, text))
 
+def _split(text, limit=180):
+    out = []
+    for s in re.split(r"(?<=[.!?])\s+", text):
+        while len(s) > limit:
+            cut = s.rfind(", ", 0, limit)
+            cut = cut + 1 if cut > 40 else limit
+            out.append(s[:cut].strip())
+            s = s[cut:].strip()
+        if s:
+            out.append(s)
+    return out
+
+# def speak(text, cache=False):
+#     """one short phrase, no splitting. cache arg kept for compat, ignored."""
+#     _enqueue(text)
 
 def speak(text, cache=False):
-    """one short phrase, no splitting. cache arg kept for compat, ignored."""
-    _enqueue(text)
+    total = 0
+    for chunk in _split(_clean(text)):
+        total += len(chunk)
+        if total > MAX_CHARS:
+            break
+        _text_q.put((_gen, chunk))
 
 
 class Stream:

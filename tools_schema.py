@@ -356,6 +356,7 @@ TOOL_SCHEMAS = [
                 "parks, museums, fuel, airports, stations. Sorted by distance. "
                 "Leave near empty to use the user's saved location. Set near only when the user names another place. "
                 "No ratings or reviews."
+                "Default attraction. Use attraction for interesting places, sights, things to see."
             ),
             "parameters": {
                 "type": "object",
@@ -367,7 +368,37 @@ TOOL_SCHEMAS = [
                     "radius_km": {"type": "number", "description": "Search radius in km, 0.2 to 100. Default 10."},
                     "limit": {"type": "integer", "description": "Results, 1 to 15. Default 10."},
                 },
-                "required": ["category"],
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "use_skill",
+            "description": "Activate an installed skill by exact name from the Skills list. Its instructions then appear in the system prompt.",
+            "parameters": {
+                "type": "object",
+                "properties": {"name": {"type": "string", "description": "Skill name copied exactly from the Skills list."}},
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "install_skill",
+            "description": (
+                "Install an agent skill from GitHub when the user gives a link or owner/repo. "
+                "Shows the user the skill and asks approval. Copy source exactly from the user's message. "
+                "Never install on your own."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string", "description": "owner/repo, owner/repo/path, or github.com link, copied from the user."}
+                },
+                "required": ["source"],
             },
         },
     },

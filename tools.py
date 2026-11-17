@@ -10,6 +10,8 @@ from interrupt import ask
 from ocr_tool import ocr_image
 from weather_tool import get_weather
 from places_tool import find_places
+from skills_tool import use_skill
+from skills_install import install_skill
 
 def set_browser_mode(mode: str) -> str:
     if mode not in ("headless", "visible"):
@@ -55,8 +57,12 @@ async def call_tool(name: str, args: dict) -> str:
         return LOCAL_TOOLS[name](**args)
     if name == "get_weather":
         return await get_weather(**args)
+    if name == "use_skill":
+        return await use_skill(**args)
     if name == "find_places":
         return await find_places(**args)
+    if name == "install_skill":
+        return await install_skill(**args)
     if name == "browser_navigate" and not args.get("url"):
         return 'error: browser_navigate needs url. Resend exactly: {"url": "https://en.wikipedia.org/wiki/India"} with the real link.'
     if name.startswith("browser_"):

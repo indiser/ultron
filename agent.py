@@ -6,11 +6,13 @@ from tools import call_tool, missing_args
 import traceback
 from text_ui import c
 import re
+from skills_tool import ACTIVE, LIST_MARK, SKILL_MARK, active_block, route, skills_block
+from skills_install import source_in_text
 
 RESEARCH_RE = re.compile(r"\b(?:deep[- ]research|research(?:ing)?\s+(?:on|about|into|this|it|the|how|why|what|who|when|where)|(?:do|run|please|can you)\s+research)\b|^\s*research\b", re.I)
 FILE_RE = re.compile(r"\b(?:save|file|csv|txt|download|export)\b|\.(?:txt|csv|md)\b", re.I)
 NUDGE = "[nudge] "
-
+LEAK_RE = re.compile(r"^\s*(?:the user|user input|user (?:is|has|asked|wants|repeated)|i (?:must|need to|will) )", re.I)
 
 def last_user(messages: list) -> str:
     for m in reversed(messages):
@@ -59,6 +61,8 @@ async def run_agent(messages: list) -> str:
     seen = set()
     purge_nudges(messages)
     user_text = last_user(messages)
+    base = messages[0]["content"].split(LIST_MARK)[0].split(SKILL_MARK)[0]
+    ACTIVE["name"] = route(user_text)
     want_research = bool(RESEARCH_RE.search(user_text))
     want_file = bool(FILE_RE.search(user_text))
     researched = False
@@ -66,7 +70,9 @@ async def run_agent(messages: list) -> str:
     fails = {}
     cmd_fails = 0
     errs = 0
+    leak_nudged = False
     for _ in range(MAX_STEPS):
+        messages[0]["content"] = base + skills_block() + active_block()
         trim_history(messages=messages)
         drop_old_turns(messages=messages)
         t = time.time()
@@ -76,7 +82,8 @@ async def run_agent(messages: list) -> str:
                 messages= messages,
                 tools= TOOL_SCHEMAS,
                 temperature= 0.1,
-                max_tokens= 1500
+                max_tokens= 4096,
+                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
             )
         except Exception as e:
             body = getattr(getattr(e, "response", None), "text", "")
@@ -92,6 +99,10 @@ async def run_agent(messages: list) -> str:
                 if text.strip():
                     messages.append({"role": "assistant", "content": text})
                 messages.append({"role": "user", "content": NUDGE + f"Research request: {user_text[:300]}. Call the research tool now with a query taken from that request. Do not answer from memory."})
+                continue
+            if LEAK_RE.match(text) and not leak_nudged:
+                leak_nudged = True
+                messages.append({"role": "user", "content": NUDGE + "Your reply contained your own reasoning. Reply again with only the answer for the user. No analysis."})
                 continue
             if not text.strip() and not nudged:
                 nudged = True
@@ -121,6 +132,8 @@ async def run_agent(messages: list) -> str:
                     result = "error: call web_search first. Use research only if snippets lack the answer."
                 elif name == "run_command" and cmd_fails >= 5:
                     result = "error: 5 commands failed. Stop. Tell the user what failed and what you tried."
+                elif name == "install_skill" and not source_in_text(args.get("source", ""), user_text):
+                    result = "error: install_skill only works for a source the user typed. Ask the user for the skill link."
                 elif fails.get(key, 0) >= 2:
                     result = "error: this exact call failed twice. Change the args or tell the user what is missing."
                 elif key in seen and name not in ("run_command", "browser_snapshot", "set_browser_mode"):

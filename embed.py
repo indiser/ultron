@@ -7,7 +7,8 @@ _embedder = None
 class RemoteEmbedder:
     def __init__(self, base_url: str, model: str):
         from openai import OpenAI
-        self.c = OpenAI(base_url=base_url, api_key="no-api")
+        # self.c = OpenAI(base_url=base_url, api_key="no-api")
+        self.c = OpenAI(base_url=base_url, api_key="no-api", timeout=15, max_retries=0)
         self.model = model
 
     def encode(self, texts, normalize_embeddings=True, batch_size=16, **kw):

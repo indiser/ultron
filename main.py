@@ -17,6 +17,8 @@ from rag import ingest_doc, ingest_url, list_docs, remove_doc, upload_doc
 from interrupt import run_cancellable
 from text_ui import c, read_you
 from weather_tool import load_location, save_location, ip_location, geocode, precise_location
+from skills_tool import load_skills, skills_block
+from skills_install import install_skill, remove_skill
 
 STOP_WORDS = {"stop", "/stop", "quiet", "enough", "shut up"}
 
@@ -43,11 +45,12 @@ async def main():
     try:
         async with AsyncExitStack() as stack:
             await connect_mcp(stack)
+            load_skills()
             messages = [
                 {"role": "system", "content": build_prompt(
                     memory=load_memory(),
                     today=date.today().isoformat(),
-                    shell="Windows cmd.exe" if os.name == "nt" else "bash")}
+                    shell="Windows cmd.exe" if os.name == "nt" else "bash") + skills_block()}
             ]
             print(c("info", "\nUltron"))
             pending = []
@@ -103,10 +106,20 @@ async def main():
                             save_location(loc)
                             acc = f", +-{loc['acc_m']} m" if loc.get("acc_m") else ""
                             print(f"location saved: {loc['name']} ({loc['source']}{acc})")
-                            save_location(loc)
-                            print(f"location saved: {loc['name']} ({loc['source']})")
                         except Exception as e:
                             print(c("error", f"error: {e}"))
+                        continue
+                    if cmd in ("/skills", "/skill"):
+                        print("\n".join(f"{s['name']}: {s['desc']}" for s in load_skills().values()) or "no skills")
+                        continue
+                    if cmd.startswith("/skill add "):
+                        print(await install_skill(cmd[11:].strip()))
+                        continue
+                    if cmd.startswith("/skill remove "):
+                        print(remove_skill(cmd[14:].strip()))
+                        continue
+                    if cmd.startswith("/"):
+                        print(c("error", "unknown command. Known: /upload /add /docs /remove /loc /skills /skill add /skill remove /stop"))
                         continue
                     held = list(pending)
                     if pending:
