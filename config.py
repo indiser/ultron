@@ -5,13 +5,15 @@ import os
 from pathlib import Path
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
+import httpx
 
 load_dotenv()
 
 client = AsyncOpenAI(
     base_url = os.environ.get("BRAIN_LLM_BASE_URL"),
     api_key = "no-api",
-    max_retries = 0,
+    max_retries = 2,
+    timeout = httpx.Timeout(300.0, connect=20.0),
 )
 MODEL = os.environ.get("BRAIN_LLM_NAME")
 

@@ -95,17 +95,32 @@ def _store(source: str, pieces: list[tuple[str, str]]) -> int:
     return len(chunks)
 
 
+# def ingest_doc(filename: str) -> str:
+#     path = safe_path(filename)
+#     if not path.is_file():
+#         return f"error: no file named {filename}"
+#     try:
+#         n = _store(filename, _extract(path))
+#     except Exception as e:
+#         return f"error: {type(e).__name__}: {e}"
+#     if not n:
+#         return f"error: no text in {filename}. Scanned PDF? Needs OCR."
+#     return f"indexed: {filename}, {n} chunks"
+
 def ingest_doc(filename: str) -> str:
     path = safe_path(filename)
     if not path.is_file():
         return f"error: no file named {filename}"
     try:
-        n = _store(filename, _extract(path))
+        pieces = _extract(path)
+        n = _store(filename, pieces)
     except Exception as e:
         return f"error: {type(e).__name__}: {e}"
     if not n:
         return f"error: no text in {filename}. Scanned PDF? Needs OCR."
-    return f"indexed: {filename}, {n} chunks"
+    full = " ".join(t for _, t in pieces)
+    preview = " ".join(full.split())[:600]
+    return f"indexed: {filename}, {n} chunks. Preview: {preview}. Use search_docs or read_doc for details."
 
 
 async def ingest_url(url: str) -> str:

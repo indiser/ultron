@@ -26,6 +26,7 @@ def clean_markdown(text: str) -> str:
     text = re.sub(r"\[\[\d+\]\]\(#[^)]*\)", "", text)
     text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"(?m)^[*\-]\s*(?:What links here|Related changes|Upload file|Permanent link|Page information|Cite this page|Get shortened URL|Switch to legacy parser|Download as PDF|Printable version|Wikimedia Commons|Wikidata item)\s*$", "", text)
     return text.strip()
 
 # Webpage markdown format analyze in chunks
@@ -222,8 +223,11 @@ async def research(query: str, save_to: str = "", top_k: int = 3) -> str:
                     f"Preview of first 5 only: {', '.join(items[:5])}. "
                     f"Tell the user the file is complete with {len(items)} items."
                 )
-        return (f"error: no ranked page had a clean numbered list of {need}+ items. Tried:\n"
-        + "\n".join(p["url"] for p in pages))
+        if save_to.lower().endswith(".csv") or mt:
+            return (f"error: no ranked page had a clean numbered list of {need}+ items. Tried:\n"
+                    + "\n".join(p["url"] for p in pages))
+        # return (f"error: no ranked page had a clean numbered list of {need}+ items. Tried:\n"
+        # + "\n".join(p["url"] for p in pages))
 
     best = pages[0]
     order = np.argsort(-best["chunk_scores"])[:2]

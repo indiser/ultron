@@ -1,6 +1,7 @@
 import math
 import httpx
 from weather_tool import saved_or_detect, geocode
+import asyncio
 
 OSM = {
     "restaurant": "amenity=restaurant", "cafe": "amenity=cafe", "fast_food": "amenity=fast_food",
@@ -11,9 +12,8 @@ OSM = {
     "railway_station": "railway=station", "bus_station": "amenity=bus_station",
 }
 
-OVERPASS = ["https://overpass-api.de/api/interpreter",
-            "https://overpass.private.coffee/api/interpreter",
-            "https://overpass.kumi.systems/api/interpreter"]
+OVERPASS = ["https://overpass.openstreetmap.fr/api/interpreter",
+            "https://overpass-api.de/api/interpreter"]
 
 
 def _km(a_lat, a_lon, b_lat, b_lon) -> float:
@@ -75,24 +75,54 @@ async def _where(near: str) -> dict:
 #         lines.append(f"{i}. {name}, {d:.1f} km" + (f", {addr}" if addr else "") + (f", {extra}" if extra else ""))
 #     return "\n".join(lines)
 
+# async def _overpass(q: str) -> list:
+#     last = "no server answered"
+#     async with httpx.AsyncClient(timeout=30) as h:
+#         for url in OVERPASS:
+#             host = url.split("/")[2]
+#             try:
+#                 r = await h.post(url, data={"data": q}, headers={"User-Agent": "UltronAgent/1.0"})
+#                 if r.status_code != 200:
+#                     last = f"{host} returned {r.status_code}"
+#                     continue
+#                 d = r.json()
+#                 if d.get("remark") and not d.get("elements"):
+#                     last = f"{host}: {str(d['remark'])[:80]}"
+#                     continue
+#                 return d.get("elements", [])
+#             except Exception as e:
+#                 last = f"{host}: {type(e).__name__}"
+#     raise RuntimeError(last)
+
+async def _one(h, url: str, q: str) -> list:
+    host = url.split("/")[2]
+    try:
+        r = await h.post(url, data={"data": q}, headers={"User-Agent": "UltronAgent/1.0"})
+    except Exception as e:
+        raise RuntimeError(f"{host} {type(e).__name__}")
+    if r.status_code != 200:
+        raise RuntimeError(f"{host} returned {r.status_code}")
+    d = r.json()
+    if d.get("remark") and not d.get("elements"):
+        raise RuntimeError(f"{host}: {str(d['remark'])[:60]}")
+    return d.get("elements", [])
+
+
 async def _overpass(q: str) -> list:
-    last = "no server answered"
-    async with httpx.AsyncClient(timeout=30) as h:
-        for url in OVERPASS:
-            host = url.split("/")[2]
-            try:
-                r = await h.post(url, data={"data": q}, headers={"User-Agent": "UltronAgent/1.0"})
-                if r.status_code != 200:
-                    last = f"{host} returned {r.status_code}"
-                    continue
-                d = r.json()
-                if d.get("remark") and not d.get("elements"):
-                    last = f"{host}: {str(d['remark'])[:80]}"
-                    continue
-                return d.get("elements", [])
-            except Exception as e:
-                last = f"{host}: {type(e).__name__}"
-    raise RuntimeError(last)
+    errs = []
+    async with httpx.AsyncClient(timeout=15) as h:
+        tasks = [asyncio.create_task(_one(h, u, q)) for u in OVERPASS]
+        try:
+            for fut in asyncio.as_completed(tasks):
+                try:
+                    return await fut
+                except Exception as e:
+                    errs.append(str(e))
+        finally:
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+    raise RuntimeError("; ".join(errs)[:200] or "no server answered")
 
 
 def _rows(els: list, loc: dict) -> list:
