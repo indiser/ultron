@@ -12,6 +12,8 @@ from weather_tool import get_weather
 from places_tool import find_places
 from skills_tool import use_skill
 from skills_install import install_skill
+from calc_tool import *
+from status_tool import *
 
 def set_browser_mode(mode: str) -> str:
     if mode not in ("headless", "visible"):
@@ -38,6 +40,8 @@ LOCAL_TOOLS = {
     "list_docs": list_docs,
     "upload_doc": upload_doc,
     "remove_doc": remove_doc,
+    "calculate": calculate,
+    "system_status": system_status,
 }
 
 GATED = {"browser_click", "browser_type", "browser_fill_form", "browser_press_key", "remove_doc", "delete_file"}

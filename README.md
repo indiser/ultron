@@ -21,8 +21,10 @@ main.py
   ├── interrupt.py          ← Esc key cancellation of in-flight agent tasks (Windows)
   ├── text_ui.py            ← ANSI colour theming for the terminal
   ├── voice_in.py           ← STT client (faster-whisper WebSocket, VAD, partials)
-  └── agent.py              ← agentic loop (MAX_STEPS=40, dynamic context budget, tool dispatch)
+  ├── config.py             ← centralised config (client, MODEL, WORKSPACE, paths)
+  └── agent.py              ← agentic loop (MAX_STEPS=40, streaming, guard rails, trace)
         ├── tools.py        ← tool router (local + MCP + browser)
+        │     ├── tools_schema.py   ← all tool JSON schemas
         │     ├── file_tools.py     ← sandboxed workspace R/W + delete
         │     ├── shell_tool.py     ← user-approved subprocess execution
         │     ├── web_tool.py       ← DuckDuckGo search
@@ -37,14 +39,20 @@ main.py
         │     ├── skills_tool.py    ← skill loader, embedding-based auto-router, use_skill
         │     │     └── skills_install.py ← GitHub skill installer with integrity verification
         │     ├── mem_tools.py      ← persistent memory (memory.md)
+        │     ├── calc_tool.py      ← sandboxed AST math evaluator (arithmetic, trig, logs, combinatorics)
+        │     ├── status_tool.py    ← local system metrics (CPU, RAM, disk, GPU, battery)
         │     └── mcp_client.py     ← MCP servers (time, Scrapling) + Playwright browser
-        └── voice_out.py            ← offline TTS pipeline (PocketTTS + sentence streaming)
+        ├── voice_out.py            ← offline TTS pipeline (PocketTTS + sentence streaming + Stream class)
+        ├── smoke.py                ← automated 20-scenario test suite (easy/med/hard/extreme)
+        └── trace.jsonl             ← runtime event log (tool calls, guards, final replies)
 ```
 
 ### Core Components
 
 **Agent Loop** (`agent.py`)
-The brain. Runs up to 40 reasoning steps per query. Each step calls the LLM, dispatches tool calls, feeds results back, and repeats until the model produces a final text response. Context window management is dynamic — the budget is computed from the system prompt size plus a 12k overhead, trimming old tool results and dropping stale turns as needed. Result cap is 8000 chars per tool call. Responses are capped at 1500 tokens. A consecutive error counter aborts the loop early after 4 back-to-back tool failures rather than burning all 40 steps. After a successful `write_file`, `edit_file`, or `delete_file`, the deduplication set is cleared so the agent can make fresh calls on the updated workspace. A per-key failure counter (`fails`) blocks any identical call that has already failed twice. When the user's message contains a research keyword, `wants_research()` detects it and the loop silently remaps any `web_search` call to `research` and nudges the model if it tries to answer without calling the tool first.
+The brain. Runs up to 40 reasoning steps per query. LLM calls are fully streamed via `chat_stream` (`stream=True`, `max_tokens=8192`) — tool call arguments are assembled from delta chunks so the loop never blocks waiting for a complete response. Context window management is dynamic — the budget is computed from the system prompt size plus a 12k overhead, trimming old tool results and dropping stale turns as needed. Result cap is 8000 chars per tool call. A consecutive error counter aborts the loop early after 4 back-to-back tool failures. After a successful `write_file`, `edit_file`, or `delete_file`, the deduplication set is cleared. A per-key failure counter (`fails`) blocks any identical call that has already failed twice.
+
+The loop enforces a suite of guard rails before accepting a final reply: research keyword → remaps `web_search` to `research` and nudges if the model tries to answer without calling it; `REQUIRED` patterns (weather, nearby) → forces the matching tool; `CLAIM_RE` → catches replies that describe an action no tool performed; `MEM_RE` → forces `save_memory` when the user asks to remember something; `CLEANUP_RE` → forces `delete_file` when a temp file was written; `MATH_RE` → verifies multi-digit multiplication in the reply; `CANNED_RE` → rejects generic "Done." filler. Every tool call, guard trigger, and final reply is appended to `trace.jsonl`.
 
 **Research Engine** (`research_tool.py` + `timeline_rows.py`)
 For deep queries, it:
@@ -78,8 +86,10 @@ Two Playwright MCP sessions run in parallel at startup — one headless (backed 
 **Voice Pipeline** (`voice_out.py`)
 Fully async, two-thread pipeline powered by [PocketTTS](https://github.com/pocket-tts/pocket-tts) — a local, offline TTS model. At startup, the model loads a `.safetensors` voice state file cloned from a reference audio clip. A synthesis thread streams audio chunks via `generate_audio_stream`, and a playback thread writes them directly to a `sounddevice` output stream. Sentences are split and queued as the LLM responds, so speech begins before the full response is generated. No network calls, no API keys, no remote endpoints — the entire voice pipeline runs on-device.
 
+A `Stream` class enables token-delta feeding: call `stream.feed(delta)` as LLM chunks arrive and `stream.flush()` at the end — each sentence is enqueued for synthesis the moment it completes, with an early flush at a comma so audio starts sooner. `TTS_MAX_CHARS` (env, default 600) caps how much of a response is spoken.
+
 **Speech Input** (`voice_in.py`)
-A WebSocket STT client that streams raw 16 kHz PCM from the microphone to a `faster-whisper` server running on the Kaggle backend. The server (`stt_server.py`, written by the notebook) runs `faster-whisper large-v3-turbo` on GPU with built-in VAD — it detects speech onset, streams partial transcripts every ~0.7 s, and emits a final transcript when silence exceeds 600 ms. The client mutes itself while TTS is playing so Ultron does not transcribe its own voice. Voice mode is toggled with `/voice` in the terminal; saying "voice off" switches back to typing. If `STT_WS_URL` is not set, the STT client is not initialised and the terminal falls back to keyboard input silently.
+A WebSocket STT client that streams raw 16 kHz PCM from the microphone to a `faster-whisper` server running on the Kaggle backend. The server (`stt_server.py`, written by the notebook) runs `faster-whisper large-v3-turbo` on GPU with built-in VAD — it detects speech onset, streams partial transcripts every ~0.7 s, and emits a final transcript when silence exceeds 600 ms. The client mutes itself while TTS is playing so Ultron does not transcribe its own voice. Voice mode is toggled with `/voice` in the terminal; saying "voice off" switches back to typing. If `STT_WS_URL` is not set, the STT client is not initialised and the terminal falls back to keyboard input silently. Set `STT_MIC` in `.env` to a device index or name to override the default microphone. `listen()` also accepts an `on_level` callback (RMS volume 0–1) and an `on_speech` callback (VAD state), plus an optional `stop` asyncio event for push-to-talk.
 
 **MCP Integration** (`mcp_client.py`)
 Connects to two MCP servers at startup via stdio:
@@ -96,11 +106,23 @@ A hot-loadable plugin system that injects domain-specific instructions into the 
 
 `skills_install.py` handles installing skills from GitHub. It downloads the repo as a zip, validates the SKILL.md front matter, enforces size limits (30 MB zip, 5 MB unpacked, 100 files), rejects binary and symlink entries, shows the user the skill description and instructions, and requires explicit `y/N` approval before writing to disk. A SHA-256 tree hash is stored in `.source.json` on install; if any file changes after install the skill is skipped on load as tampered. Skills can be removed via `/skill remove <name>`.
 
+**Calculator** (`calc_tool.py`)
+A sandboxed AST-based math evaluator — no `eval`, no subprocess. Parses the expression into an AST, walks only whitelisted node types, and executes against a fixed set of operators and ~40 math functions (`sqrt`, `cbrt`, `sin`/`sind`, `log`, `factorial`, `comb`, `perm`, `gcd`, `lcm`, etc.) plus constants (`pi`, `e`, `tau`). Handles implicit multiplication (`2pi` → `2*pi`), thousands-comma stripping, percentage shorthand (`15%` → `(15/100)`), and Unicode operators (`×`, `÷`, `−`, `π`). Supports up to 10 semicolon/newline-separated expressions per call. Hard limits on exponent size, factorial input, result magnitude, and AST node count prevent runaway computation.
+
+**System Status** (`status_tool.py`)
+Reports a live snapshot of the local machine: CPU usage, core count, clock frequency, load average, RAM and swap (used/total/percent), per-disk usage, battery state and time remaining, GPU utilisation and VRAM via `nvidia-smi`, CPU temperature, system uptime, and Ultron's own process RSS. Uses `psutil` when available and falls back to OS-native APIs (Windows `GlobalMemoryStatusEx`/`GetTickCount64`, Linux `/proc/meminfo` and `/proc/uptime`, macOS `sysctl`/`vm_stat`) so it works without any optional dependency.
+
 **Persona** (`Sys_Prompt.txt`)
 The active system prompt defining identity, voice, humor rules, safety floor, and security robustness. Composed with agent tool rules and the installed skills list at runtime via `build_prompt()` in `SYSTEM_PROMPT.py`. The persona is a costume. Competence is not optional.
 
+**Tracing** (`trace.jsonl`)
+Every agent run appends structured JSON lines to `trace.jsonl` — one line per tool call (name, args, result preview), one per guard trigger (kind), and one final line with the reply text. Useful for debugging guard-rail behaviour and tool routing without adding print statements.
+
+**Test Suite** (`smoke.py`)
+20 automated scenarios across four tiers (easy / med / hard / extreme). Each scenario specifies required tools, forbidden tools, minimum step count, expected tool order, and an optional regex the final reply must match. The suite patches `call_tool` with a spy, skips the browser MCP, and prints PASS / WARN / FAIL per scenario with timing. Run with `uv run smoke.py`.
+
 **Speech Input (external / built-in)**
-Ultron now has a built-in STT pipeline via `voice_in.py`. It connects over WebSocket to a `faster-whisper` server hosted on the Kaggle backend (same session as the LLM). Enable it by setting `STT_WS_URL` and `STT_TOKEN` in `.env` and typing `/voice` in the terminal. Without those vars set, the terminal falls back to keyboard input with no code change required. [Wispr Flow](https://wisprflow.ai) remains a viable alternative for system-wide transcription without the Kaggle dependency.
+Ultron has a built-in STT pipeline via `voice_in.py`. It connects over WebSocket to a `faster-whisper` server hosted on the Kaggle backend (same session as the LLM). Enable it by setting `STT_WS_URL` and `STT_TOKEN` in `.env` and typing `/voice` in the terminal. Without those vars set, the terminal falls back to keyboard input with no code change required. [Wispr Flow](https://wisprflow.ai) remains a viable alternative for system-wide transcription without the Kaggle dependency.
 
 ---
 
@@ -137,10 +159,12 @@ EMBED_BASE_URL=<embedding-endpoint>
 # Optional: built-in voice input (faster-whisper WebSocket)
 STT_WS_URL=<wss://your-tunnel.trycloudflare.com/ws>
 STT_TOKEN=<token printed by the notebook>
+STT_MIC=<device index or name, optional — defaults to system default mic>
 
 # TTS: path to your .safetensors voice state file
 # Defaults to first_voice.safetensors in the project root if not set
 TTS_STATE=<path-to-voice.safetensors>
+TTS_MAX_CHARS=600  # max characters spoken per response (default 600)
 ```
 
 ### Run
@@ -192,6 +216,8 @@ These are handled directly in the input loop, outside the agent:
 | `ocr_image` | Extract text from an image, save as `.ocr.md`, and index it |
 | `get_weather` | Current weather and up to 7-day forecast via Open-Meteo |
 | `find_places` | Nearby places by category via OpenStreetMap, sorted by distance |
+| `calculate` | Evaluate math expressions: arithmetic, percentages, powers, trig, logs, factorials, combinatorics |
+| `system_status` | Check local machine CPU, RAM, swap, disk, battery, GPU, uptime, and Ultron process RAM |
 | `use_skill` | Activate an installed skill by name |
 | `install_skill` | Install a skill from a GitHub repo (user approval required) |
 | `set_browser_mode` | Switch browser between headless and visible |
@@ -223,13 +249,13 @@ This is version 0.1.0. It is a proof of concept, not a production system.
 - Browser actions that mutate state require user approval, but the approval prompt is a simple `y/N` in the terminal.
 - Error handling is functional but not exhaustive.
 - The voice pipeline requires `sounddevice`, which can be finicky on Windows depending on audio drivers.
-- No tests exist.
+- `smoke.py` provides a 20-scenario automated test suite but it requires a live LLM backend and MCP servers to run. It is not a unit test suite and does not mock the model.
 
 ---
 
 ## Future Improvements
 
-- **Streaming responses** — pipe LLM token deltas directly to the TTS `Stream` class so speech latency drops to near-zero
+- **Streaming responses** — LLM responses are now streamed token-by-token. The `Stream` class in `voice_out.py` feeds deltas to TTS sentence-by-sentence. End-to-end latency from first token to first audio is already low; further gains are possible by piping the stream directly into the agent reply path.
 - **Voice input** — the built-in STT pipeline (`voice_in.py`) requires the Kaggle server to be running. A fully offline replacement (e.g. [Handy](https://github.com/handyai/handy) or a local Whisper model) would make the entire pipeline air-gapped
 - **Local OCR** — replace the remote OCR endpoint with a local model (e.g. Tesseract or a local vision LLM) so image reading works fully offline
 - **GUI / web interface** — a minimal frontend so this isn't terminal-only

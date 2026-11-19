@@ -402,4 +402,33 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "calculate",
+            "description": "Evaluate exact arithmetic, percentages, powers (**), trig (sin/sind), logs, factorials, and combinatorics safely.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "expression": {
+                        "type": "string",
+                        "description": "Math expression, e.g. '(1450 * 1.18) - 200' or 'sqrt(144) + comb(10, 3)'",
+                    }
+                },
+                "required": ["expression"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "system_status",
+            "description": "Check local machine CPU, RAM, swap, disk usage, battery, GPU, uptime, and Ultron RAM usage.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": [],
+            },
+        },
+    },
 ]
