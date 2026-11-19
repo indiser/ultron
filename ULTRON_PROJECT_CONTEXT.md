@@ -1,5 +1,5 @@
 <!--
-AI-CONTEXT-DOC | project: Ultron | doc-version: 1.2.0 | last-updated: 2026-11-15
+AI-CONTEXT-DOC | project: Ultron | doc-version: 1.3.0 | last-updated: 2026-11-19
 Update rules are in SECTION 14. Never overwrite; append.
 -->
 
@@ -70,6 +70,9 @@ project/
 ├── ocr_tool.py          # ocr_image tool + ocr_file_sync(): image → Kaggle OCR job → text
 ├── weather_tool.py      # NEW v1.2.0: get_weather, location helpers (IP lookup, geocode, save/load) [UNVERIFIED applied]
 ├── places_tool.py       # NEW v1.2.0: find_places via OpenStreetMap Overpass [UNVERIFIED applied]
+├── skills_tool.py       # NEW v1.3.0: load_skills(), route(), use_skill(), with_skills(), skills_block(), active_block(), tree_hash(), parse_text() [UNVERIFIED applied]
+├── skills_install.py    # NEW v1.3.0: install_skill(source), remove_skill(name), GitHub zip download + safe extract [UNVERIFIED applied]
+├── skills/              # (runtime) one folder per skill: skills/<name>/SKILL.md + .source.json (sha256 pin)
 ├── upload_ui.py         # tkinter file picker subprocess
 ├── interrupt.py         # ask() prompt lock, run_cancellable() Esc-to-cancel (Windows)
 ├── text_ui.py           # c(kind, text) colors, read_you()
@@ -83,6 +86,7 @@ project/
 ├── .venv/               # (runtime) uv venv for agent-run commands
 ├── .env                 # (NOT UPLOADED) see Section 4
 └── first_voice.safetensors  # (NOT UPLOADED) TTS voice prompt state
+
 ```
 
 ### Import graph (who imports whom)
@@ -102,6 +106,11 @@ tools → weather_tool (get_weather), places_tool (find_places)
 places_tool → weather_tool (load_location, save_location, ip_location, geocode)
 main → weather_tool (load_location, save_location, ip_location, geocode) for /loc
 file_tools → rag (lazy import of remove_doc inside delete_file)
+skills_tool → config (QUERY_PREFIX), embed (get_embedder), text_ui (c, read_you), numpy, yaml
+skills_install → skills_tool (SKILLS_DIR, load_skills, parse_text, tree_hash), interrupt (ask), httpx
+tools → skills_tool (use_skill), skills_install (install_skill, remove_skill)
+main → skills_tool (load_skills, route, ACTIVE, with_skills), skills_install
+agent → skills_tool (with_skills)
 ```
 `tools.py` and `shell_tool.py`/`file_tools.py` use `from X import *`. Watch for name collisions when adding module-level names.
 
@@ -149,7 +158,7 @@ External services used without API keys:
 Privacy: first no-arg weather/places call sends your public IP to ip-api.com once. Result cached in `location.json`. Setting `/loc <city>` first avoids any IP lookup.
 
 Required external binaries: `uv`, `uvx`, `npx`, `obscura`, `scrapling` (CLI with `mcp` subcommand).
-
+v1.3.0: no new env vars. New deps: `pyyaml`, `numpy`, `httpx`.
 ---
 
 ## 5. Runtime flow
@@ -160,6 +169,8 @@ Required external binaries: `uv`, `uvx`, `npx`, `obscura`, `scrapling` (CLI with
 3. Build system message: `build_prompt(memory=load_memory(), today=<iso date>, shell="Windows cmd.exe" or "bash")`.
 4. REPL loop: `read_you()` → handle commands → else append user message → `run_cancellable(run_agent(messages))`.
 5. On exit: terminate obscura.
+
+Change v1.3.0 `[UNVERIFIED applied]`: after `build_prompt`, `load_skills()` then `messages[0]["content"] = with_skills(messages[0]["content"])`. Per user turn, before `run_agent`: `ACTIVE["name"] = route(user_text)` (in `asyncio.to_thread`), then `with_skills` again. `run_agent` calls `with_skills` at top of each step so `use_skill` mid-turn takes effect.
 
 Note: `voice_out` loads the TTS model at import time (prints `[tts] loading model...`, runs a warmup generation). Startup is slow because of this.
 
@@ -174,6 +185,9 @@ Note: `voice_out` loads the TTS model at import time (prints `[tts] loading mode
 | `/loc` | show saved location `[UNVERIFIED applied]` |
 | `/loc auto` | re-detect by IP and save `[UNVERIFIED applied]` |
 | `/loc <city>` or `/loc <city>, <region>` | geocode and save; text after the comma filters same-name cities `[UNVERIFIED applied]` |
+| `/skills` | list installed skills `[UNVERIFIED applied]` |
+| `/skill-install <owner/repo[/path] or github url>` | `install_skill` `[UNVERIFIED applied]` |
+| `/skill-remove <name>` | `remove_skill` `[UNVERIFIED applied]` |
 | anything else | goes to agent |
 
 After a successful index, a `pending` list is prepended to the *next* user message as `[system: indexed: ...  Use search_docs or read_doc ...]` so the LLM knows about new docs. If a turn is cancelled (Esc), messages added that turn are deleted (`del messages[n:]`) and `pending` is restored.
@@ -266,6 +280,9 @@ Defined in `tools_schema.py` (`TOOL_SCHEMAS`, OpenAI function format). Implement
 | `delete_file(filename)` | file_tools | files only, never folders. `safe_path` (workspace only). `path.unlink()`, then lazy `rag.remove_doc(filename)` (errors ignored) so index chunks go too. Returns `deleted: <name>`. Errors: `error: no file named X`, `error: X is not a file. Folders are not deleted.` GATED: user types `y`. No undo, no trash. |
 | `get_weather(location="", days=3)` | weather_tool (async, special-cased in `call_tool`) | current + daily forecast 1–7 days from Open-Meteo. Empty location = saved location (first use: IP lookup, saved to `location.json`). Named location = one-shot geocode, NOT saved. Output header names the place and location source. Errors: `error: location failed: ... Ask the user for a city name.`, `error: weather request failed: ...`. `[UNVERIFIED applied]` |
 | `find_places(category, near="", radius_km=2, limit=8)` | places_tool (async, special-cased) | OSM Overpass. `category` is a schema enum: restaurant cafe fast_food bar hospital pharmacy atm bank fuel hotel museum attraction park supermarket airport railway_station bus_station. Radius clamped 0.2–20 km, limit 1–15. Sorted by haversine distance. Unnamed elements skipped. Output: name, km, address, cuisine, hours, phone. No ratings (OSM has none). Errors: `error: unknown category`, `error: map server busy. Tell the user to retry in a minute.` (HTTP 429/504). `[UNVERIFIED applied]` |
+| `use_skill(name)` | skills_tool | async special case in `call_tool`. Sets `ACTIVE["name"]`. Returns `skill <name> activated...`. Error: `error: no skill '<name>'. Installed: ...` |
+| `install_skill(source)` | skills_install | async special case. Own y/N prompt via `interrupt.ask`. Source `owner/repo[/path]` or github.com link. |
+| `remove_skill(name)` | skills_install | GATED. `shutil.rmtree(skills/<name>)`. |
 
 ### MCP tools (registered at runtime in `mcp_client.py`)
 - `get_current_time` from `mcp-server-time`.
@@ -284,7 +301,7 @@ Update v1.2.0: async special cases before `LOCAL_TOOLS` are now `research`, `ing
 
 Change v1.1.0 `[UNVERIFIED applied]`: `mcp_client.py` gets `clean_schema()` (drops `$schema` and `additionalProperties`, ensures `type`, `properties`, `required`). `browser_navigate` schema forced to `required: ["url"]` with a `url` property. Tool descriptions cut to 200 chars. `tools.py` empty-url error text: `error: browser_navigate needs url. Resend exactly: {"url": "https://en.wikipedia.org/wiki/India"} with the real link.`
 
-
+Change v1.3.0: `GATED` also contains `remove_skill`. Async special cases before `LOCAL_TOOLS` now also: `use_skill`, `install_skill`.
 
 ---
 
@@ -350,6 +367,7 @@ Change v1.2.0, added to `AGENT_RULES` (all `[UNVERIFIED applied]` except delete_
 - Tools list: `find_places: nearby places by category, sorted by distance. No ratings. Empty near = saved location. Never web_search for "near me".`
 Schema text changes: `research` description says "Always use when the user says research or deep research."; `web_search` description appended "Never use when the user asks for research or deep research."
 
+v1.3.0: Tools section gets `use_skill(name)` and `install_skill(source)` lines. `with_skills()` appends `## Skills installed` list and `## ACTIVE SKILL` body to system message at runtime (not in `SYSTEM_PROMPT.py` text).
 ---
 
 ## 10. Remote LLM and embedding server (Kaggle notebook)
@@ -480,7 +498,12 @@ Ordered roughly by impact. Fix or acknowledge before piling on features.
 32. Forced research regex (`RESEARCH_RE`) is loose: "explain my research paper" also forces `research`. Each forced `research` costs 30–90 s plus embedding calls to Kaggle. `[UNVERIFIED applied]`
 33. Travel planning facts (checked 2026-11-15, web search): Amadeus Self-Service portal decommissioned 17 July 2026, keys deactivated (enterprise contracts only). Kiwi Tequila invitation-only. Skyscanner Flights API partner-gated. Duffel offers search + booking via self-serve signup but test mode returns sandbox data, not real fares. Scrape-style options (Google Flights actors on Apify, Ignav) exist, unofficial or vendor-claimed, free tiers unknown. No free official real-fare API for hobby use.
 34. Booking safety: letting the agent pay is NOT allowed by design (weak model, hallucinated args seen in items 21, 22, prompt injection, no undo). Agreed design: agent searches and returns options plus a deep link (Google Flights / airline URL from IATA codes + dates); human clicks and pays.
-
+35. Skill body capped at `MAX_BODY = 4000` chars. Extra files and scripts in `skills/<name>/` not readable by agent: `safe_path` is workspace-only. Only SKILL.md body reaches model. `[UNVERIFIED applied]`
+36. Skill routing = embedding sim of user text vs skill `description`, threshold `SIM_MIN = 0.55`. Untuned. Misses or false hits likely. `route()` is sync, runs on embedder (CPU or remote). Adds latency per turn. `[UNVERIFIED applied]`
+37. Skill text is untrusted prompt injection surface. Mitigations: install preview + y/N, size/file limits, binary ext block, symlink/zip-slip checks, `.source.json` sha256 pin (changed files → skipped at load), active block warning text. Scripts in skill only run via `run_command` (user y/N). `[UNVERIFIED applied]`
+38. Tool count +2/+3 (`use_skill`, `install_skill`, `remove_skill`). Worsens item 30. 
+39. `ACTIVE["name"]` reset every turn by `route()`. No sticky skill across turns. `use_skill` mid-turn lasts until next user message.
+40. Skill name must equal folder name and match `NAME_RE`. Install fails if `skills/<name>` exists.
 ---
 
 ## 14. HOW TO UPDATE THIS DOCUMENT (instructions for any AI)
@@ -531,6 +554,7 @@ Compare to Section 3/6; list differences you found; then apply the procedure.
 | 1.0.0 | 2026-11-15 | Initial doc generated from full codebase upload (20 files) | all |
 | 1.1.0 | 2026-11-15 | Added OCR (`ocr_tool.py`, `ocr_image`, async job API on Kaggle, image branch in `rag._extract`). New Kaggle notebook `ultron_kaggle_server.ipynb`: llama.cpp `llama-server --jinja`, GGUF/safetensors/model-id loader, 2-GPU split, CUDA 13 workarounds. Agent guard changes `[UNVERIFIED applied]`, browser schema cleanup `[UNVERIFIED applied]`, prompt additions `[UNVERIFIED applied]`. Known issues 19–27 added. | 2, 3, 4, 5, 6, 8, 9, 10.1, 13, 16.1 |
 | 1.2.0 | 2026-11-15 | Added `delete_file` (file_tools, GATED, schema, prompt). Forced research routing in `agent.py` `[UNVERIFIED applied]`. Added `weather_tool.py` (`get_weather`, location helpers, `/loc` command, `location.json`) `[UNVERIFIED applied]`. Added `places_tool.py` (`find_places`, OSM Overpass) `[UNVERIFIED applied]`. Documented travel-search API landscape and no-agent-booking decision. Fixed 1.1.0 paste slips (stray changelog row, missing 16.1, guard order note). Known issues 28–34 added. | 3, 4, 5, 6, 9, 11, 13, 16.1–16.4, 17 |
+| 1.3.0 | 2026-11-19 | Added skills system: `skills_tool.py` (load, parse, embed-route, `use_skill`, `with_skills`), `skills_install.py` (GitHub install, remove). `skills/` dir, `/skills` `/skill-install` `/skill-remove`. Wiring in `main.py`, `agent.py`, `tools.py`, `tools_schema.py`, `SYSTEM_PROMPT.py` `[UNVERIFIED applied]`. Known issues 35–40. | 3, 4, 5, 6, 9, 13, 16.5, 17 |
 <!-- APPEND NEW CHANGELOG ROWS ABOVE THIS LINE, KEEP TABLE FORMAT -->
 
 ---
@@ -580,6 +604,30 @@ Decision log:
 - Flight search source still undecided (Section 13 item 33). Deep-link builder needs IATA codes + dates, no API.
 - Places beyond nearby lookup (ratings, details) would need Google Places or Foursquare: key + billing + terms, not evaluated.
 
+## 16.5 Skills (v1.3.0)
+
+Files: `skills_tool.py`, `skills_install.py`, dir `skills/`.
+
+Skill format: folder `skills/<name>/SKILL.md` with YAML front matter (`name`, `description`, optional `compatibility`) then body. `name` must equal folder name. Description cut to 300 chars, compat to 200.
+
+`skills_tool.py`:
+- `load_skills()`: scans `skills/*/SKILL.md` into `SKILLS` dict. If `.source.json` present, recomputes `tree_hash` and skips skill on mismatch (`[skill] <name>: files changed since install, skipped`). Delete `.source.json` to trust.
+- `skills_block()`: `## Skills installed` + `- name: desc` lines.
+- `active_block()`: `## ACTIVE SKILL: <name>` + untrusted-warning + body[:4000].
+- `with_skills(base)`: strips old marks, returns `base + skills_block() + active_block()`.
+- `route(user_text)`: embeds descriptions once (`_vecs`), embeds `QUERY_PREFIX + user_text[:500]`, cosine, best if `>= SIM_MIN (0.55)` else `None`. Prints `[skill] best=... sim=...`.
+- `use_skill(name)`: sets `ACTIVE["name"]`.
+
+`skills_install.py`:
+- `parse_source`: `owner/repo[/path]` or github.com link, `/tree/<branch>/` and `/blob/` handled.
+- `_download`: `https://github.com/<o>/<r>/archive/<ref>.zip`, cap 30 MB.
+- `_find`: locate dir with `SKILL.md`; multi-skill repo → error listing choices, user must give path.
+- `_extract`: limits 100 files, 5 MB unpacked; rejects `..`, abs paths, symlinks, `BAD_EXT` binaries. Lists `SCRIPT_EXT` files for preview.
+- `install_skill`: parse front matter, `NAME_RE`, refuse if exists, stage in `skills/.staging-<name>`, print preview (desc, files, scripts, first 600 chars of body), y/N, move into place, write `.source.json` `{source, sha256, installed}`, `load_skills()`.
+- `remove_skill(name)`: rmtree + reload.
+
+Flow: user msg → `route()` → `ACTIVE` → `with_skills` → system msg. Model can also call `use_skill(name)` from the installed list.
+Limits: no script runner, no skill file reader, one active skill at a time.
 ---
 
 ## 17. Roadmap / planned features (append only)
@@ -598,6 +646,10 @@ Decision log:
 - [ ] Verify and remove `[UNVERIFIED applied]` tags: forced research, weather/location, places, `/loc`
 - [ ] Tighten `RESEARCH_RE` if false positives appear
 - [ ] Optional precise location via Windows Location API (needs OS permission, API not verified)
+- [ ] Verify and remove `[UNVERIFIED applied]` tags: skills wiring (main, agent, tools, schema, prompt)
+- [ ] Tune `SIM_MIN` from real `[skill] best=... sim=...` logs
+- [ ] Let agent read skill extra files (read-only `skills/<name>/` reader)
+- [ ] Sticky active skill across turns (optional)
 <!-- Mark done as `- [x] ... (vX.Y.Z)`, never delete items. -->
 
 ---
