@@ -20,6 +20,7 @@ The persona is inspired by the philosophical, darkly funny Ultron of the cinema 
 main.py
   ├── interrupt.py          ← Esc key cancellation of in-flight agent tasks (Windows)
   ├── text_ui.py            ← ANSI colour theming for the terminal
+  ├── voice_in.py           ← STT client (faster-whisper WebSocket, VAD, partials)
   └── agent.py              ← agentic loop (MAX_STEPS=40, dynamic context budget, tool dispatch)
         ├── tools.py        ← tool router (local + MCP + browser)
         │     ├── file_tools.py     ← sandboxed workspace R/W + delete
@@ -77,6 +78,9 @@ Two Playwright MCP sessions run in parallel at startup — one headless (backed 
 **Voice Pipeline** (`voice_out.py`)
 Fully async, two-thread pipeline powered by [PocketTTS](https://github.com/pocket-tts/pocket-tts) — a local, offline TTS model. At startup, the model loads a `.safetensors` voice state file cloned from a reference audio clip. A synthesis thread streams audio chunks via `generate_audio_stream`, and a playback thread writes them directly to a `sounddevice` output stream. Sentences are split and queued as the LLM responds, so speech begins before the full response is generated. No network calls, no API keys, no remote endpoints — the entire voice pipeline runs on-device.
 
+**Speech Input** (`voice_in.py`)
+A WebSocket STT client that streams raw 16 kHz PCM from the microphone to a `faster-whisper` server running on the Kaggle backend. The server (`stt_server.py`, written by the notebook) runs `faster-whisper large-v3-turbo` on GPU with built-in VAD — it detects speech onset, streams partial transcripts every ~0.7 s, and emits a final transcript when silence exceeds 600 ms. The client mutes itself while TTS is playing so Ultron does not transcribe its own voice. Voice mode is toggled with `/voice` in the terminal; saying "voice off" switches back to typing. If `STT_WS_URL` is not set, the STT client is not initialised and the terminal falls back to keyboard input silently.
+
 **MCP Integration** (`mcp_client.py`)
 Connects to two MCP servers at startup via stdio:
 - `mcp-server-time` — current time
@@ -95,8 +99,8 @@ A hot-loadable plugin system that injects domain-specific instructions into the 
 **Persona** (`Sys_Prompt.txt`)
 The active system prompt defining identity, voice, humor rules, safety floor, and security robustness. Composed with agent tool rules and the installed skills list at runtime via `build_prompt()` in `SYSTEM_PROMPT.py`. The persona is a costume. Competence is not optional.
 
-**Speech Input (external)**
-Ultron has no built-in STT. Voice input is currently handled by [Wispr Flow](https://wisprflow.ai), which transcribes speech system-wide and types the result into the terminal. It works, but it phones home. The planned replacement is [Handy](https://github.com/handyai/handy) — a fully offline STT tool with the same system-wide injection behaviour, keeping the entire pipeline air-gapped.
+**Speech Input (external / built-in)**
+Ultron now has a built-in STT pipeline via `voice_in.py`. It connects over WebSocket to a `faster-whisper` server hosted on the Kaggle backend (same session as the LLM). Enable it by setting `STT_WS_URL` and `STT_TOKEN` in `.env` and typing `/voice` in the terminal. Without those vars set, the terminal falls back to keyboard input with no code change required. [Wispr Flow](https://wisprflow.ai) remains a viable alternative for system-wide transcription without the Kaggle dependency.
 
 ---
 
@@ -130,6 +134,10 @@ BRAIN_LLM_BASE_URL=<openai-compatible-base-url>
 # Required for OCR
 EMBED_BASE_URL=<embedding-endpoint>
 
+# Optional: built-in voice input (faster-whisper WebSocket)
+STT_WS_URL=<wss://your-tunnel.trycloudflare.com/ws>
+STT_TOKEN=<token printed by the notebook>
+
 # TTS: path to your .safetensors voice state file
 # Defaults to first_voice.safetensors in the project root if not set
 TTS_STATE=<path-to-voice.safetensors>
@@ -151,13 +159,14 @@ These are handled directly in the input loop, outside the agent:
 | `/add <path or URL>` | Ingest a local file or web URL directly |
 | `/docs` | List all indexed documents |
 | `/remove <filename>` | Remove a document from the RAG store |
-| `/loc` | Show the currently saved location |
+| `/skill remove <name>` | Remove an installed skill |
 | `/loc auto` | Re-detect location via IP and save it |
 | `/loc here` | Use Windows Location API for precise GPS coordinates |
 | `/loc <city>` | Geocode a city and save it as the active location |
+| `/voice` or `/voice on` | Enable voice input (requires `STT_WS_URL` in `.env`) |
+| `/voice off` | Switch back to keyboard input |
 | `/skills` | List all installed skills |
 | `/skill add <source>` | Install a skill from GitHub (owner/repo or URL) |
-| `/skill remove <name>` | Remove an installed skill |
 
 ---
 
@@ -202,7 +211,7 @@ These are handled directly in the input loop, outside the agent:
 
 This is version 0.1.0. It is a proof of concept, not a production system.
 
-- The LLM backend and embedding server are expected to be externally hosted (e.g. on a Kaggle instance tunneled via Cloudflare). They are ephemeral and will go down. The TTS pipeline is fully local and offline.
+- The STT pipeline requires `STT_WS_URL` to be set and the Kaggle session to be running. Without it the terminal falls back to keyboard input silently. They are ephemeral and will go down. The TTS pipeline is fully local and offline.
 - There is no GUI. It is a terminal loop.
 - Memory is a flat markdown file. There is no retrieval, no forgetting.
 - The RAG store is a local ChromaDB instance. It persists across sessions but has no access control.
@@ -221,7 +230,7 @@ This is version 0.1.0. It is a proof of concept, not a production system.
 ## Future Improvements
 
 - **Streaming responses** — pipe LLM token deltas directly to the TTS `Stream` class so speech latency drops to near-zero
-- **Voice input** — replace Wispr Flow with [Handy](https://github.com/handyai/handy) for fully offline, privacy-preserving STT; no audio leaves the machine
+- **Voice input** — the built-in STT pipeline (`voice_in.py`) requires the Kaggle server to be running. A fully offline replacement (e.g. [Handy](https://github.com/handyai/handy) or a local Whisper model) would make the entire pipeline air-gapped
 - **Local OCR** — replace the remote OCR endpoint with a local model (e.g. Tesseract or a local vision LLM) so image reading works fully offline
 - **GUI / web interface** — a minimal frontend so this isn't terminal-only
 - **Local LLM fallback** — automatic failover to a local model when the remote backend is unreachable
@@ -243,7 +252,7 @@ OCR: `pillow`, `httpx`
 Weather/Places: `httpx`
 Skills: `pyyaml`
 Browser: `@playwright/mcp` (via npx), `obscura`
-Audio: `sounddevice`, `soundfile`, `pocket-tts`, `torch`
+Audio: `sounddevice`, `soundfile`, `pocket-tts`, `torch`, `websockets`
 Runtime: `uv` (Python 3.14+)
 
 ---

@@ -3616,12 +3616,14 @@ dependencies = [
     { name = "pypdf" },
     { name = "python-docx" },
     { name = "python-dotenv" },
+    { name = "pyyaml" },
     { name = "requests" },
     { name = "scikit-learn" },
     { name = "scrapling", extra = ["all"] },
     { name = "sentence-transformers" },
     { name = "sounddevice" },
     { name = "soundfile" },
+    { name = "websockets" },
 ]
 
 [package.metadata]
@@ -3638,12 +3640,14 @@ requires-dist = [
     { name = "pypdf", specifier = ">=7.0.1" },
     { name = "python-docx", specifier = ">=1.2.0" },
     { name = "python-dotenv", specifier = ">=1.2.4" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "requests", specifier = ">=2.34.2" },
     { name = "scikit-learn", specifier = ">=1.9.1" },
     { name = "scrapling", extras = ["all"], specifier = ">=0.5" },
     { name = "sentence-transformers", specifier = ">=6.2.0" },
     { name = "sounddevice" },
     { name = "soundfile" },
+    { name = "websockets", specifier = ">=17.4" },
 ]
 
 [[package]]

@@ -18,3 +18,4 @@ pypdf
 python-docx
 Pillow
 pyyaml
+websockets

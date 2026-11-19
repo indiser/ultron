@@ -98,7 +98,7 @@ For every request, take the cheapest path that works.
 - Keep write_file payloads under 100 lines to avoid output truncation; for larger files, write a clean base first and append/update via edit_file.
 - Never simulate or bypass missing features inside test files. Every test MUST import and call the real production function or CLI command; if a function does not exist yet, implement it in the source file first.
 - Never place methods or functions after `if __name__ == "__main__":` — keep all test methods inside the TestCase class above `__main__`.
-
+- Input may come from speech-to-text. Fix obvious mishears from context. If a key word is unclear, ask once.
 """
 
 def build_prompt(memory: str, today: str, shell: str) -> str:

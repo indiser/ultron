@@ -17,10 +17,12 @@ dependencies = [
     "pypdf>=7.0.1",
     "python-docx>=1.2.0",
     "python-dotenv>=1.2.4",
+    "pyyaml>=6.0.3",
     "requests>=2.34.2",
     "scikit-learn>=1.9.1",
     "scrapling[all]>=0.5",
     "sentence-transformers>=6.2.0",
     "sounddevice",
     "soundfile",
+    "websockets>=17.4",
 ]

@@ -19,8 +19,10 @@ from text_ui import c, read_you
 from weather_tool import load_location, save_location, ip_location, geocode, precise_location
 from skills_tool import load_skills, skills_block
 from skills_install import install_skill, remove_skill
+from voice_in import STT
 
 STOP_WORDS = {"stop", "/stop", "quiet", "enough", "shut up"}
+VOICE_OFF = {"voice off", "stop listening", "type mode"}
 
 def wait_port(port: int, timeout: float = 15) -> bool:
     end = time.time() + timeout
@@ -54,9 +56,28 @@ async def main():
             ]
             print(c("info", "\nUltron"))
             pending = []
+            stt = STT() if os.environ.get("STT_WS_URL") else None
+            voice = False
             try:
                 while True:
-                    user = read_you()
+                    if voice:
+                        try:
+                            user = await stt.listen(
+                                on_partial=lambda t: print("\r " + c("think", ".. " + t[-100:]) + " " * 10, end="", flush=True))
+                        except Exception as e:
+                            print(c("error", f"\nvoice error: {type(e).__name__}: {e}. Back to typing."))
+                            voice = False
+                            stt.ws = None
+                            continue
+                        print("\r" + " " * 110 + "\rYou: " + user)
+                        if not user.strip():
+                            continue
+                        if user.lower().strip(" .!?,") in VOICE_OFF:
+                            voice = False
+                            print(c("info", " [voice off]"))
+                            continue
+                    else:
+                        user = read_you()
                     cmd = user.strip()
                     if cmd.lower().strip(" .!") in STOP_WORDS:
                         voice_out.stop()
@@ -82,6 +103,16 @@ async def main():
                         print(res)
                         if res.startswith("indexed:"):
                             pending.append(res)
+                        continue
+                    if cmd in ("/voice", "/voice on"):
+                        if not stt:
+                            print(c("error", "set STT_WS_URL and STT_TOKEN in .env first"))
+                        else:
+                            voice = True
+                            print(c("info", " [voice on] speak. say 'voice off' to type again"))
+                        continue
+                    if cmd == "/voice off":
+                        voice = False
                         continue
                     if cmd == "/docs":
                         print(list_docs())
@@ -119,7 +150,7 @@ async def main():
                         print(remove_skill(cmd[14:].strip()))
                         continue
                     if cmd.startswith("/"):
-                        print(c("error", "unknown command. Known: /upload /add /docs /remove /loc /skills /skill add /skill remove /stop"))
+                        print(c("error", "unknown command. Known: /upload /add /docs /remove /loc /skills /skill add /skill remove /voice /stop"))
                         continue
                     held = list(pending)
                     if pending:
@@ -143,6 +174,9 @@ async def main():
                         voice_out.speak(answer)
             except (EOFError, KeyboardInterrupt):
                 print("\nbye")
+            finally:
+                if stt:
+                    await stt.close()
     finally:
         if obs:
             obs.terminate()
