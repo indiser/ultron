@@ -20,6 +20,9 @@ from weather_tool import load_location, save_location, ip_location, geocode, pre
 from skills_tool import load_skills, skills_block
 from skills_install import install_skill, remove_skill
 from voice_in import STT
+from recall_tool import log_turn, clear_history
+from github_tool import find_link
+from scheduler_tool import start_scheduler, stop_scheduler
 
 STOP_WORDS = {"stop", "/stop", "quiet", "enough", "shut up"}
 VOICE_OFF = {"voice off", "stop listening", "type mode"}
@@ -58,6 +61,12 @@ async def main():
             pending = []
             stt = STT() if os.environ.get("STT_WS_URL") else None
             voice = False
+            agent_busy = False
+            start_scheduler(
+                is_busy=lambda: agent_busy,
+                get_system_prompt=lambda: messages[0]["content"],
+                run_agent_fn=run_agent,
+            )
             try:
                 while True:
                     if voice:
@@ -152,15 +161,28 @@ async def main():
                     if cmd.startswith("/"):
                         print(c("error", "unknown command. Known: /upload /add /docs /remove /loc /skills /skill add /skill remove /voice /stop"))
                         continue
+                    raw_user = user
+                    if cmd == "/forget":
+                        print(clear_history())
+                        continue
                     held = list(pending)
                     if pending:
                         user = "[system: " + "; ".join(pending) + ". Use search_docs or read_doc for questions about them.]\n" + user
                         pending.clear()
+                    gl = find_link(user)
+                    if gl:
+                        user = (f'[system: GitHub link in message. Call the github tool, action "{gl["action"]}", '
+                                f'repo exactly "{gl["url"]}". Never ingest_url, web_search or browse a github.com link.]\n' + user)
                     voice_out.stop()
                     n = len(messages)
                     messages.append({"role": "user", "content": user})
                     print(c("think", " [Esc = cancel]"))
                     answer, cancelled = await run_cancellable(run_agent(messages))
+                    agent_busy = True
+                    try:
+                        reply = await run_cancellable(run_agent(messages))
+                    finally:
+                        agent_busy = False
                     if cancelled:
                         del messages[n:]
                         pending.extend(held)
@@ -171,6 +193,8 @@ async def main():
                         print("\n" + c("error", answer))
                     else:
                         print("\n" + c("assistant", "Assistant: " + answer))
+                        log_turn("user", raw_user)
+                        log_turn("assistant", answer)
                         voice_out.speak(answer)
             except (EOFError, KeyboardInterrupt):
                 print("\nbye")
@@ -180,6 +204,7 @@ async def main():
     finally:
         if obs:
             obs.terminate()
+        stop_scheduler()
 
 
 if __name__ == "__main__":

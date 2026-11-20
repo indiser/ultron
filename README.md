@@ -41,6 +41,10 @@ main.py
         │     ├── mem_tools.py      ← persistent memory (memory.md)
         │     ├── calc_tool.py      ← sandboxed AST math evaluator (arithmetic, trig, logs, combinatorics)
         │     ├── status_tool.py    ← local system metrics (CPU, RAM, disk, GPU, battery)
+        │     ├── recall_tool.py    ← conversation history log + embedding search (recall/)
+        │     ├── github_tool.py    ← read-only GitHub API (repo, tree, file, PRs, issues)
+        │     ├── currency_tool.py  ← live/historical currency conversion (Frankfurter/ECB)
+        │     ├── scheduler_tool.py ← one-shot reminders + cron jobs (schedules.json)
         │     └── mcp_client.py     ← MCP servers (time, Scrapling) + Playwright browser
         ├── voice_out.py            ← offline TTS pipeline (PocketTTS + sentence streaming + Stream class)
         ├── smoke.py                ← automated 20-scenario test suite (easy/med/hard/extreme)
@@ -106,6 +110,18 @@ A hot-loadable plugin system that injects domain-specific instructions into the 
 
 `skills_install.py` handles installing skills from GitHub. It downloads the repo as a zip, validates the SKILL.md front matter, enforces size limits (30 MB zip, 5 MB unpacked, 100 files), rejects binary and symlink entries, shows the user the skill description and instructions, and requires explicit `y/N` approval before writing to disk. A SHA-256 tree hash is stored in `.source.json` on install; if any file changes after install the skill is skipped on load as tampered. Skills can be removed via `/skill remove <name>`.
 
+**Conversation Recall** (`recall_tool.py`)
+Persists every finished user/assistant turn to `recall/chat_log.jsonl` and lazily builds a matching embedding index in `recall/vecs.npy`. The `recall` tool searches past sessions by semantic similarity — it embeds the query, scores all stored turns, and returns the top matches with timestamps and paired context. Embedding is incremental: only new turns are encoded on each call, with a 60-second deadline to avoid blocking on large backlogs. A minimum similarity threshold (`RECALL_MIN`, default 0.45, tunable via `.env`) filters noise. `clear_history()` wipes both files. The `/forget` slash command calls it directly from the terminal.
+
+**GitHub** (`github_tool.py`)
+Read-only GitHub integration — no write path. Accepts any pasted `github.com` link and automatically detects the action (repo summary, folder tree, file read, PR/issue). Works on public repos without a token (60 req/hour); a `GITHUB_TOKEN` in `.env` raises the limit to 5000/hour and unlocks personal account actions (`my_prs`, `review_requests`, `my_issues`, `notifications`). `find_link()` is called in `main.py` on every user message — if a GitHub URL is detected, a system hint is prepended so the agent always uses the `github` tool instead of `browser` or `ingest_url`. Long files are paginated in 3500-char parts. All content returned is prefixed with an untrusted-source warning so the agent never follows instructions embedded in repo files.
+
+**Currency Conversion** (`currency_tool.py`)
+Converts between currencies using live or historical ECB rates via the Frankfurter API (no API key required). Tries the primary `api.frankfurter.dev/v1` endpoint first, falls back to `api.frankfurter.app`. Accepts common aliases and symbols (`$`, `₹`, `€`, `£`, `¥`, `yuan`, `pound`, etc.) in addition to ISO codes. Validates amount, currency codes, and date before making any network call. Returns the converted amount, rate, inverse rate, and the ECB date the rate is from.
+
+**Scheduler** (`scheduler_tool.py`)
+Background asyncio task that fires one-shot reminders and recurring cron jobs while the terminal loop is running. Jobs are persisted to `schedules.json` and survive restarts. Two modes: `notify` speaks the task text directly via TTS; `agent` runs a silent tool check via the full agent loop and only speaks if the result warrants an alert. Supports human duration strings (`15m`, `2h`), time-of-day (`18:30`), ISO datetimes, and standard 5-field cron expressions with `@hourly`/`@daily`/`@weekly` shortcuts. Missed one-shot reminders are caught on startup and spoken if they fired within the last hour. The scheduler is started in `main.py` with callbacks for `is_busy`, `get_system_prompt`, and `run_agent` so agent-mode jobs wait for the foreground turn to finish before calling the LLM.
+
 **Calculator** (`calc_tool.py`)
 A sandboxed AST-based math evaluator — no `eval`, no subprocess. Parses the expression into an AST, walks only whitelisted node types, and executes against a fixed set of operators and ~40 math functions (`sqrt`, `cbrt`, `sin`/`sind`, `log`, `factorial`, `comb`, `perm`, `gcd`, `lcm`, etc.) plus constants (`pi`, `e`, `tau`). Handles implicit multiplication (`2pi` → `2*pi`), thousands-comma stripping, percentage shorthand (`15%` → `(15/100)`), and Unicode operators (`×`, `÷`, `−`, `π`). Supports up to 10 semicolon/newline-separated expressions per call. Hard limits on exponent size, factorial input, result magnitude, and AST node count prevent runaway computation.
 
@@ -113,7 +129,7 @@ A sandboxed AST-based math evaluator — no `eval`, no subprocess. Parses the ex
 Reports a live snapshot of the local machine: CPU usage, core count, clock frequency, load average, RAM and swap (used/total/percent), per-disk usage, battery state and time remaining, GPU utilisation and VRAM via `nvidia-smi`, CPU temperature, system uptime, and Ultron's own process RSS. Uses `psutil` when available and falls back to OS-native APIs (Windows `GlobalMemoryStatusEx`/`GetTickCount64`, Linux `/proc/meminfo` and `/proc/uptime`, macOS `sysctl`/`vm_stat`) so it works without any optional dependency.
 
 **Persona** (`Sys_Prompt.txt`)
-The active system prompt defining identity, voice, humor rules, safety floor, and security robustness. Composed with agent tool rules and the installed skills list at runtime via `build_prompt()` in `SYSTEM_PROMPT.py`. The persona is a costume. Competence is not optional.
+The active system prompt defining identity, voice, humor rules, safety floor, and security robustness. Composed with agent tool rules and the installed skills list at runtime via `build_prompt()` in `SYSTEM_PROMPT.py`. The persona is a costume. Competence is not optional. The agent rules now include explicit triage paths for `calculate`, `system_status`, `convert_currency`, `manage_schedule`, and `recall`, plus a hard rule that any pasted `github.com` link must go through the `github` tool — never `browser` or `ingest_url` — and that all GitHub-sourced content is treated as untrusted data.
 
 **Tracing** (`trace.jsonl`)
 Every agent run appends structured JSON lines to `trace.jsonl` — one line per tool call (name, args, result preview), one per guard trigger (kind), and one final line with the reply text. Useful for debugging guard-rail behaviour and tool routing without adding print statements.
@@ -153,7 +169,7 @@ BRAIN_LLM_NAME=<your-model-name>
 BRAIN_LLM_BASE_URL=<openai-compatible-base-url>
 
 # Optional: remote embeddings (falls back to local sentence-transformers)
-# Required for OCR
+# Required for OCR and recall
 EMBED_BASE_URL=<embedding-endpoint>
 
 # Optional: built-in voice input (faster-whisper WebSocket)
@@ -165,6 +181,14 @@ STT_MIC=<device index or name, optional — defaults to system default mic>
 # Defaults to first_voice.safetensors in the project root if not set
 TTS_STATE=<path-to-voice.safetensors>
 TTS_MAX_CHARS=600  # max characters spoken per response (default 600)
+
+# Optional: GitHub read-only access (public repos work without a token at 60 req/hour)
+# Fine-grained token scopes needed: Metadata, Contents, Issues, Pull requests
+GITHUB_TOKEN=<github_pat_...>
+GITHUB_REPO=<owner/repo>  # default repo when none is pasted
+
+# Optional: minimum cosine similarity for recall hits (default 0.45)
+RECALL_MIN=0.45
 ```
 
 ### Run
@@ -189,6 +213,7 @@ These are handled directly in the input loop, outside the agent:
 | `/loc <city>` | Geocode a city and save it as the active location |
 | `/voice` or `/voice on` | Enable voice input (requires `STT_WS_URL` in `.env`) |
 | `/voice off` | Switch back to keyboard input |
+| `/forget` | Wipe the conversation recall history (`recall/chat_log.jsonl` + `recall/vecs.npy`) |
 | `/skills` | List all installed skills |
 | `/skill add <source>` | Install a skill from GitHub (owner/repo or URL) |
 
@@ -218,6 +243,10 @@ These are handled directly in the input loop, outside the agent:
 | `find_places` | Nearby places by category via OpenStreetMap, sorted by distance |
 | `calculate` | Evaluate math expressions: arithmetic, percentages, powers, trig, logs, factorials, combinatorics |
 | `system_status` | Check local machine CPU, RAM, swap, disk, battery, GPU, uptime, and Ultron process RAM |
+| `recall` | Search past conversations by topic; optional `days_back` filter |
+| `github` | Read-only GitHub: repo summary, folder tree, file text, PR/issue details, personal PR/issue lists |
+| `convert_currency` | Convert between currencies using live or historical ECB rates (Frankfurter API) |
+| `manage_schedule` | Create one-shot reminders or recurring cron jobs; list, toggle, remove, or run immediately |
 | `use_skill` | Activate an installed skill by name |
 | `install_skill` | Install a skill from a GitHub repo (user approval required) |
 | `set_browser_mode` | Switch browser between headless and visible |
@@ -250,6 +279,10 @@ This is version 0.1.0. It is a proof of concept, not a production system.
 - Error handling is functional but not exhaustive.
 - The voice pipeline requires `sounddevice`, which can be finicky on Windows depending on audio drivers.
 - `smoke.py` provides a 20-scenario automated test suite but it requires a live LLM backend and MCP servers to run. It is not a unit test suite and does not mock the model.
+- Conversation recall stores every turn in `recall/chat_log.jsonl` as plain text. Delete the `recall/` folder or use `/forget` to clear it.
+- The scheduler persists jobs to `schedules.json`. Jobs survive restarts but are tied to the local clock — if the machine is off when a one-shot reminder fires, it will be spoken on next startup if it missed by less than 1 hour.
+- GitHub integration is read-only. `my_prs`, `review_requests`, `my_issues`, and `notifications` require `GITHUB_TOKEN` in `.env`. Notifications require a classic token with the `notifications` scope — fine-grained tokens do not support it.
+- Currency conversion uses the Frankfurter API (ECB rates). Not all currency pairs are supported — pairs outside the ECB basket fall back to `web_search`.
 
 ---
 
@@ -263,7 +296,7 @@ This is version 0.1.0. It is a proof of concept, not a production system.
 - **Tool sandboxing** — run `run_command` inside a Docker container or Windows sandbox instead of the host shell
 - **Tool routing** — activate tool groups (browser, weather, places, docs, OCR) only when the user's message matches relevant keywords, reducing wrong-tool failures as the tool count grows (the skills system already does this for skills via embedding similarity)
 - **Multi-agent** — spawn sub-agents for parallelizable research tasks instead of sequential tool calls
-- **Persistent sessions** — save and restore full conversation history across restarts
+- **Persistent sessions** — full conversation history (not just recall snippets) across restarts
 - **Wake word** — always-on microphone with a wake word to trigger the agent without typing
 - **Plugin system** — skills cover prompt-level plugins; the next step is hot-loadable *tool* modules that register new tool schemas without restarting
 - **Emotion-aware TTS** — modulate voice tone based on response content using the emotion vector API
@@ -275,7 +308,7 @@ This is version 0.1.0. It is a proof of concept, not a production system.
 Core: `openai`, `mcp`, `ddgs`, `scrapling`, `sentence-transformers`, `numpy`, `python-dotenv`
 RAG: `chromadb`, `pypdf`, `python-docx`
 OCR: `pillow`, `httpx`
-Weather/Places: `httpx`
+Weather/Places/Currency/GitHub: `httpx`
 Skills: `pyyaml`
 Browser: `@playwright/mcp` (via npx), `obscura`
 Audio: `sounddevice`, `soundfile`, `pocket-tts`, `torch`, `websockets`

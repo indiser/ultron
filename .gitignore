@@ -14,3 +14,6 @@ chroma_db/
 location.json
 .playwright-mcp/
 dbg.py
+recall/
+trace.jsonl
+schedules.json

@@ -14,6 +14,11 @@ from skills_tool import use_skill
 from skills_install import install_skill
 from calc_tool import *
 from status_tool import *
+from recall_tool import recall
+import asyncio
+from github_tool import github
+from currency_tool import *
+from scheduler_tool import *
 
 def set_browser_mode(mode: str) -> str:
     if mode not in ("headless", "visible"):
@@ -65,6 +70,27 @@ async def call_tool(name: str, args: dict) -> str:
         return await use_skill(**args)
     if name == "find_places":
         return await find_places(**args)
+    if name == "convert_currency":
+        return await convert_currency(
+            amount=args.get("amount", 1),
+            from_currency=args.get("from_currency", ""),
+            to_currency=args.get("to_currency", ""),
+            date=args.get("date", ""),
+        )
+    if name == "manage_schedule":
+        return await manage_schedule(
+            action=args.get("action", ""),
+            name=args.get("name", ""),
+            when=args.get("when", ""),
+            cron=args.get("cron", ""),
+            task=args.get("task", ""),
+            mode=args.get("mode", "notify"),
+            job_id=args.get("job_id", ""),
+        )
+    if name == "recall":
+        return await asyncio.to_thread(recall, args.get("query", ""), args.get("days_back"))
+    if name == "github":
+        return await github(**args)
     if name == "install_skill":
         return await install_skill(**args)
     if name == "browser_navigate" and not args.get("url"):

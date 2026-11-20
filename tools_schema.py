@@ -431,4 +431,106 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function", 
+        "function": {
+            "name": "recall",
+            "description": "Search earlier conversations with the user: what they asked or you answered in past sessions. Not documents (search_docs), not saved facts (memory).",
+            "parameters": {
+                "type": "object", "properties": {
+                "query": {"type": "string", "description": "Topic or words to look for in past chats."},
+                "days_back": {"type": "integer", "description": "Optional. Only the last N days."}},
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function", 
+        "function": {
+            "name": "github",
+            "description": "Read-only GitHub. repo = the github.com link the user pasted, exactly, or owner/name. Actions: repo (summary), tree (folders), read (file text), item (PR or issue), my_prs, review_requests, my_issues, notifications.",
+            "parameters": {
+                "type": "object", 
+                "properties": {
+                    "action": {"type": "string", "enum": ["repo", "tree", "read", "item", "my_prs", "review_requests", "my_issues", "notifications"]},
+                    "repo": {"type": "string", "description": "Pasted github.com link, or owner/name. Optional for my_* actions."},
+                    "path": {"type": "string", "description": "File or folder inside the repo. Optional."},
+                    "number": {"type": "integer", "description": "PR or issue number. Only for item."},
+                    "part": {"type": "integer", "description": "Page of a long file, starting at 1. Optional."}},
+                    "required": ["action"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "convert_currency",
+            "description": "Convert money between currencies using live or historical ECB rates via Frankfurter API.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "amount": {
+                        "type": "number",
+                        "description": "Amount to convert, e.g. 100",
+                    },
+                    "from_currency": {
+                        "type": "string",
+                        "description": "Source 3-letter ISO currency code, e.g. USD, EUR, INR",
+                    },
+                    "to_currency": {
+                        "type": "string",
+                        "description": "Target 3-letter ISO currency code, e.g. INR, USD, JPY",
+                    },
+                    "date": {
+                        "type": "string",
+                        "description": "Optional historical date YYYY-MM-DD. Leave empty for latest rate.",
+                    },
+                },
+                "required": ["amount", "from_currency", "to_currency"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "manage_schedule",
+            "description": "Create, list, pause, run, or delete voice reminders and recurring cron jobs (spoken alerts or background proactive checks).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["add_reminder", "add_cron", "list", "remove", "toggle", "run_now"],
+                        "description": "Schedule operation.",
+                    },
+                    "task": {
+                        "type": "string",
+                        "description": "Required for add_reminder/add_cron: exact message to speak or check, e.g. 'Check the oven'.",
+                    },
+                    "when": {
+                        "type": "string",
+                        "description": "Required for add_reminder: duration ('20s', '15m', '2h'), time ('18:30'), or 'YYYY-MM-DD HH:MM'.",
+                    },
+                    "cron": {
+                        "type": "string",
+                        "description": "Required for add_cron: 5-field cron 'min hour day month weekday' (e.g. '0 9 * * 1-5') or @hourly/@daily.",
+                    },
+                    "name": {
+                        "type": "string",
+                        "description": "Optional short label, e.g. 'Oven timer'.",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["notify", "agent"],
+                        "description": "'notify' speaks task directly; 'agent' runs silent tool check and speaks only if alert needed.",
+                    },
+                    "job_id": {
+                        "type": "string",
+                        "description": "6-char job ID for remove, toggle, or run_now.",
+                    },
+                },
+                "required": ["action"],
+            },
+        },
+    },
 ]

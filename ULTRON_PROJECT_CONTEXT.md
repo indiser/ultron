@@ -1,5 +1,5 @@
 <!--
-AI-CONTEXT-DOC | project: Ultron | doc-version: 1.3.0 | last-updated: 2026-11-19
+AI-CONTEXT-DOC | project: Ultron | doc-version: 1.5.0 | last-updated: 2026-11-20
 Update rules are in SECTION 14. Never overwrite; append.
 -->
 
@@ -68,9 +68,17 @@ project/
 ├── rag.py               # ingest/search/read/list/remove docs in ChromaDB
 ├── embed.py             # get_embedder(): local or remote bge-small
 ├── ocr_tool.py          # ocr_image tool + ocr_file_sync(): image → Kaggle OCR job → text
+├── calc_tool.py         # NEW v1.4.0: calculate() safe AST math evaluator
+├── recall_tool.py       # NEW v1.5.0: recall(), log_turn(), clear_history() semantic search over past chat turns
+├── recall/              # (runtime) chat_log.jsonl + vecs.npy embedding cache
+├── currency_tool.py     # NEW: convert_currency() + check_frankfurter_uptime() via Frankfurter API
+├── status_tool.py       # NEW v1.5.0: system_status() + get_system_metrics() cross-platform hardware telemetry
 ├── weather_tool.py      # NEW v1.2.0: get_weather, location helpers (IP lookup, geocode, save/load) [UNVERIFIED applied]
 ├── places_tool.py       # NEW v1.2.0: find_places via OpenStreetMap Overpass [UNVERIFIED applied]
+├── scheduler_tool.py    # NEW: manage_schedule() + background async cron/reminder loop with voice_out alerts & proactive agent checks
+├── schedules.json       # (runtime) persisted one-shot reminders and recurring cron jobs
 ├── skills_tool.py       # NEW v1.3.0: load_skills(), route(), use_skill(), with_skills(), skills_block(), active_block(), tree_hash(), parse_text() [UNVERIFIED applied]
+├── github_tool.py       # NEW v1.4.0: github() read-only GitHub API tool (repo, tree, read, item, PRs/issues/notifications) + link parser
 ├── skills_install.py    # NEW v1.3.0: install_skill(source), remove_skill(name), GitHub zip download + safe extract [UNVERIFIED applied]
 ├── skills/              # (runtime) one folder per skill: skills/<name>/SKILL.md + .source.json (sha256 pin)
 ├── upload_ui.py         # tkinter file picker subprocess
@@ -111,6 +119,17 @@ skills_install → skills_tool (SKILLS_DIR, load_skills, parse_text, tree_hash),
 tools → skills_tool (use_skill), skills_install (install_skill, remove_skill)
 main → skills_tool (load_skills, route, ACTIVE, with_skills), skills_install
 agent → skills_tool (with_skills)
+tools → calc_tool (calculate)
+tools → status_tool (system_status)
+tools → currency_tool (convert_currency)
+tools → github_tool (github)
+main → github_tool (find_link)
+github_tool → httpx, dotenv
+main → scheduler_tool (start_scheduler, stop_scheduler)scheduler_tool → config (SCHEDULES_FILE), voice_out, text_ui (c)
+tools → recall_tool (recall)
+main → recall_tool (log_turn)
+recall_tool → config (QUERY_PREFIX), embed (get_embedder), numpy
+
 ```
 `tools.py` and `shell_tool.py`/`file_tools.py` use `from X import *`. Watch for name collisions when adding module-level names.
 
@@ -146,6 +165,9 @@ Env vars:
 | `OCR_MODEL` | Kaggle embed_server.py | OCR HF id. Default `zai-org/GLM-OCR` |
 | `OCR_MAX_SIDE` | Kaggle embed_server.py | server-side thumbnail cap. Notebook sets 1280 (2 GPUs) or 1024 (1 GPU) |
 | `CUDA_VISIBLE_DEVICES` | Kaggle notebook | LLM server = `0`. OCR/embed server = `1` if 2 GPUs else `0` |
+| `GITHUB_TOKEN` | github_tool.py | optional fine-grained read-only PAT (raises rate limit 60→5000/hr; needed for `my_prs`, `review_requests`, `my_issues`, `notifications` [classic token only], and private repos) |
+| `GITHUB_REPO` | github_tool.py | optional default `owner/name` repo when none passed |
+| `RECALL_MIN` | recall_tool.py | min cosine similarity threshold for `recall()` hits (default `0.45`, untuned) |
 
 Note v1.1.0: `EMBED_BASE_URL` now also hosts OCR. Client builds OCR URL as `EMBED_BASE_URL.rstrip("/") + "/ocr"` then `/start` and `/<id>`. No separate OCR env var.
 Note v1.1.0: `BRAIN_LLM_NAME` must equal llama-server `--alias`. Notebook sets alias = HF repo id (or GGUF file stem for local paths) and prints the full `.env` block at the end of cell 8.
@@ -170,7 +192,7 @@ v1.3.0: no new env vars. New deps: `pyyaml`, `numpy`, `httpx`.
 4. REPL loop: `read_you()` → handle commands → else append user message → `run_cancellable(run_agent(messages))`.
 5. On exit: terminate obscura.
 
-Change v1.3.0 `[UNVERIFIED applied]`: after `build_prompt`, `load_skills()` then `messages[0]["content"] = with_skills(messages[0]["content"])`. Per user turn, before `run_agent`: `ACTIVE["name"] = route(user_text)` (in `asyncio.to_thread`), then `with_skills` again. `run_agent` calls `with_skills` at top of each step so `use_skill` mid-turn takes effect.
+Change v1.3.0 : after `build_prompt`, `load_skills()` then `messages[0]["content"] = with_skills(messages[0]["content"])`. Per user turn, before `run_agent`: `ACTIVE["name"] = route(user_text)` (in `asyncio.to_thread`), then `with_skills` again. `run_agent` calls `with_skills` at top of each step so `use_skill` mid-turn takes effect.
 
 Note: `voice_out` loads the TTS model at import time (prints `[tts] loading model...`, runs a warmup generation). Startup is slow because of this.
 
@@ -182,17 +204,17 @@ Note: `voice_out` loads the TTS model at import time (prints `[tts] loading mode
 | `/add <path or http url>` | copy+index local file, or `ingest_url` |
 | `/docs` | `list_docs()` |
 | `/remove <source>` | `remove_doc()` |
-| `/loc` | show saved location `[UNVERIFIED applied]` |
-| `/loc auto` | re-detect by IP and save `[UNVERIFIED applied]` |
-| `/loc <city>` or `/loc <city>, <region>` | geocode and save; text after the comma filters same-name cities `[UNVERIFIED applied]` |
-| `/skills` | list installed skills `[UNVERIFIED applied]` |
-| `/skill-install <owner/repo[/path] or github url>` | `install_skill` `[UNVERIFIED applied]` |
-| `/skill-remove <name>` | `remove_skill` `[UNVERIFIED applied]` |
+| `/loc` | show saved location  |
+| `/loc auto` | re-detect by IP and save  |
+| `/loc <city>` or `/loc <city>, <region>` | geocode and save; text after the comma filters same-name cities  |
+| `/skills` | list installed skills  |
+| `/skill-install <owner/repo[/path] or github url>` | `install_skill`  |
+| `/skill-remove <name>` | `remove_skill`  |
 | anything else | goes to agent |
 
 After a successful index, a `pending` list is prepended to the *next* user message as `[system: indexed: ...  Use search_docs or read_doc ...]` so the LLM knows about new docs. If a turn is cancelled (Esc), messages added that turn are deleted (`del messages[n:]`) and `pending` is restored.
 
-Change v1.2.0 `[UNVERIFIED applied]`, forced research routing in `agent.py`:
+Change v1.2.0 , forced research routing in `agent.py`:
 - Module level: `RESEARCH_RE = re.compile(r"\bresearch(?:ing)?\b", re.I)` and `wants_research(messages)`: finds last user message, strips the `[system: ...]` first line that `main.py` prepends, returns whether the regex matches.
 - In `run_agent`: `want_research = wants_research(messages)`, `researched = False`, `r_nudged = False`.
 - No-tool-call branch: if `want_research and not researched and not r_nudged` → append assistant text (if any) + user message `User asked for research. Call the research tool now. Do not answer from memory.` and `continue` (once per turn).
@@ -202,7 +224,7 @@ Change v1.2.0 `[UNVERIFIED applied]`, forced research routing in `agent.py`:
 - Regex is loose: any message containing "research" forces research. Stricter variant offered: `\b(?:deep[- ]research|research(?:ing)?\s+(?:on|about|into|this|it|the|how|why|what|who|when|where)|(?:do|run|please|can you)\s+research)\b`.
 - Research failure is final: no fallback to `web_search`.
 
-Change v1.2.0: after successful `write_file`, `edit_file` or `delete_file` (result starts `wrote`, `edited`, `deleted`) → `seen.clear()`. `[UNVERIFIED applied]` for the `seen.clear()` line itself (delete_file itself works).
+Change v1.2.0: after successful `write_file`, `edit_file` or `delete_file` (result starts `wrote`, `edited`, `deleted`) → `seen.clear()`.  for the `seen.clear()` line itself (delete_file itself works).
 Esc cancel works only on Windows (`msvcrt`); on other OS `run_cancellable` just awaits.
 
 ### Per-turn agent loop (`agent.py: run_agent(messages)`)
@@ -226,18 +248,18 @@ Guards inside the loop, evaluated in this order for each tool call:
 | identical (name, args) already called, except `run_command`, `browser_snapshot`, `set_browser_mode` | `error: identical call already made...` |
 | `missing_args()` non-empty (checks `required` in schema) | `error: <name> missing required args...` |
 | else | execute; `result = str(await call_tool(...))[:8000]` |
-| `fails[key] >= 2` (same (name,args) failed twice) `[UNVERIFIED applied]` | `error: this exact call failed twice. Change the args or tell the user what is missing.` |
+| `fails[key] >= 2` (same (name,args) failed twice)  | `error: this exact call failed twice. Change the args or tell the user what is missing.` |
 
-Order note v1.2.0: real evaluation order is research-first guard, `cmd_fails`, `fails[key] >= 2` `[UNVERIFIED applied]`, `seen` duplicate, `missing_args`, execute. The `fails` row in the table above is listed out of order.
+Order note v1.2.0: real evaluation order is research-first guard, `cmd_fails`, `fails[key] >= 2` , `seen` duplicate, `missing_args`, execute. The `fails` row in the table above is listed out of order.
 
 `cmd_fails` increments when `run_command` output contains `is not recognized`, `SyntaxError`, `Traceback`, or `was unexpected`. It resets to 0 after a successful `write_file` ("wrote..."). 
 
-Change v1.1.0 `[UNVERIFIED applied]` in `run_agent`:
+Change v1.1.0  in `run_agent`:
 - `seen` no longer permanent for failures: after a tool result starting `error:`, `seen.discard(key)` and `fails[key] += 1`. Lets legit retry after transient error. Cap 2 per identical call.
 - After successful `write_file` or `edit_file` (`wrote` / `edited`), `seen.clear()`. Lets model verify with `read_file` / `list_files`.
 - `missing_args` (tools.py) now treats `None` and `""` as missing: `[k for k in required if args.get(k) in (None, "")]`.
 
-Change v1.2.0 `[UNVERIFIED applied]`, forced research routing in `agent.py`:
+Change v1.2.0 , forced research routing in `agent.py`:
 - Module level: `RESEARCH_RE = re.compile(r"\bresearch(?:ing)?\b", re.I)` and `wants_research(messages)`: finds last user message, strips the `[system: ...]` first line that `main.py` prepends, returns whether the regex matches.
 - In `run_agent`: `want_research = wants_research(messages)`, `researched = False`, `r_nudged = False`.
 - No-tool-call branch: if `want_research and not researched and not r_nudged` → append assistant text (if any) + user message `User asked for research. Call the research tool now. Do not answer from memory.` and `continue` (once per turn).
@@ -247,9 +269,11 @@ Change v1.2.0 `[UNVERIFIED applied]`, forced research routing in `agent.py`:
 - Regex is loose: any message containing "research" forces research. Stricter variant offered: `\b(?:deep[- ]research|research(?:ing)?\s+(?:on|about|into|this|it|the|how|why|what|who|when|where)|(?:do|run|please|can you)\s+research)\b`.
 - Research failure is final: no fallback to `web_search`.
 
-Change v1.2.0: after successful `write_file`, `edit_file` or `delete_file` (result starts `wrote`, `edited`, `deleted`) → `seen.clear()`. `[UNVERIFIED applied]` for the `seen.clear()` line itself (delete_file itself works).
+Change v1.2.0: after successful `write_file`, `edit_file` or `delete_file` (result starts `wrote`, `edited`, `deleted`) → `seen.clear()`.  for the `seen.clear()` line itself (delete_file itself works).
 
 Return value convention: strings beginning `error:` are shown red in `main.py` and are NOT spoken. Everything else is printed and spoken via `voice_out.speak`.
+
+Update v1.4.0 : `github` added to async special cases before `LOCAL_TOOLS` in `call_tool`.
 
 ---
 
@@ -278,11 +302,17 @@ Defined in `tools_schema.py` (`TOOL_SCHEMAS`, OpenAI function format). Implement
 | `remove_doc(source)` | rag | GATED (asks y/N) |
 | `ocr_image(filename)` | ocr_tool (async, special-cased in `call_tool` like `ingest_url`) | image in workspace (png jpg jpeg webp bmp). If name not found and exactly one image exists in workspace, uses that image. Else error lists real image names. Saves `<stem>.ocr.md`, cached by mtime. Runs `rag.ingest_doc` on it. Returns `DONE. OCR text saved to X.ocr.md, N chars. indexed: ... Preview: <300 chars>. Use search_docs or read_doc for details.` Full text NOT returned (context budget). |
 | `delete_file(filename)` | file_tools | files only, never folders. `safe_path` (workspace only). `path.unlink()`, then lazy `rag.remove_doc(filename)` (errors ignored) so index chunks go too. Returns `deleted: <name>`. Errors: `error: no file named X`, `error: X is not a file. Folders are not deleted.` GATED: user types `y`. No undo, no trash. |
-| `get_weather(location="", days=3)` | weather_tool (async, special-cased in `call_tool`) | current + daily forecast 1–7 days from Open-Meteo. Empty location = saved location (first use: IP lookup, saved to `location.json`). Named location = one-shot geocode, NOT saved. Output header names the place and location source. Errors: `error: location failed: ... Ask the user for a city name.`, `error: weather request failed: ...`. `[UNVERIFIED applied]` |
-| `find_places(category, near="", radius_km=2, limit=8)` | places_tool (async, special-cased) | OSM Overpass. `category` is a schema enum: restaurant cafe fast_food bar hospital pharmacy atm bank fuel hotel museum attraction park supermarket airport railway_station bus_station. Radius clamped 0.2–20 km, limit 1–15. Sorted by haversine distance. Unnamed elements skipped. Output: name, km, address, cuisine, hours, phone. No ratings (OSM has none). Errors: `error: unknown category`, `error: map server busy. Tell the user to retry in a minute.` (HTTP 429/504). `[UNVERIFIED applied]` |
+| `get_weather(location="", days=3)` | weather_tool (async, special-cased in `call_tool`) | current + daily forecast 1–7 days from Open-Meteo. Empty location = saved location (first use: IP lookup, saved to `location.json`). Named location = one-shot geocode, NOT saved. Output header names the place and location source. Errors: `error: location failed: ... Ask the user for a city name.`, `error: weather request failed: ...`.  |
+| `find_places(category, near="", radius_km=2, limit=8)` | places_tool (async, special-cased) | OSM Overpass. `category` is a schema enum: restaurant cafe fast_food bar hospital pharmacy atm bank fuel hotel museum attraction park supermarket airport railway_station bus_station. Radius clamped 0.2–20 km, limit 1–15. Sorted by haversine distance. Unnamed elements skipped. Output: name, km, address, cuisine, hours, phone. No ratings (OSM has none). Errors: `error: unknown category`, `error: map server busy. Tell the user to retry in a minute.` (HTTP 429/504).  |
 | `use_skill(name)` | skills_tool | async special case in `call_tool`. Sets `ACTIVE["name"]`. Returns `skill <name> activated...`. Error: `error: no skill '<name>'. Installed: ...` |
 | `install_skill(source)` | skills_install | async special case. Own y/N prompt via `interrupt.ask`. Source `owner/repo[/path]` or github.com link. |
 | `remove_skill(name)` | skills_install | GATED. `shutil.rmtree(skills/<name>)`. |
+| `calculate(expression)` | calc_tool | safe AST evaluator (+, -, *, /, //, %, **, math fns, sind/cosd/tand, %, thousands commas); rejects ^ (prompts **), caps AST nodes (100) and power magnitude |
+| `system_status` | status_tool | cross-platform (Windows/Linux/macOS) CPU, RAM, swap, filtered disk mounts, battery, GPU, uptime, Ultron RSS; psutil + stdlib fallbacks; exposes get_system_metrics() dict for Web UI |
+| `convert_currency(amount, from_currency, to_currency, date="")` | currency_tool (async, special-cased in call_tool) | live or historical YYYY-MM-DD FX conversion via Frankfurter API (api.frankfurter.dev/v1 with api.frankfurter.app fallback); normalizes common symbols/names; ECB currencies only, directs to web_search on 404 |
+| `manage_schedule(action, ...)` | scheduler_tool (async, special-cased in call_tool) | JSON-persisted one-time reminders ('15m', '18:30', ISO) and 5-field cron jobs; mode='notify' speaks via voice_out.speak, mode='agent' runs isolated silent check when REPL idle and speaks only on alert |
+| `github(action, repo="", number=None, path="", part=None)` | github_tool (async, special-cased in `call_tool` `[UNVERIFIED]`) | read-only GitHub REST GET (`repo`, `tree`, `read`, `item`, `my_prs`, `review_requests`, `my_issues`, `notifications`); parses `github.com` repo/tree/blob/PR/issue URLs; fuzzy-matches own repo names for voice typos; `read` paginates at `PAGE = 3500` chars (`MAX_FILE = 300_000` B); prepends `UNTRUSTED` warning and caps output at 4200 chars |
+| `recall(query, days_back=None, limit=5)` | recall_tool (`[UNVERIFIED]` in `LOCAL_TOOLS`) | semantic search over `recall/chat_log.jsonl` (does not search `memory.md`); lazy-embeds unindexed turns in 64-row chunks w/ 60s tunnel-safe budget into `recall/vecs.npy`; pairs user+assistant turns; output capped at 2500 chars |
 
 ### MCP tools (registered at runtime in `mcp_client.py`)
 - `get_current_time` from `mcp-server-time`.
@@ -299,7 +329,7 @@ GATED check → `research` → `ingest_url` → `LOCAL_TOOLS` → `browser_navig
 
 Update v1.2.0: async special cases before `LOCAL_TOOLS` are now `research`, `ingest_url`, `ocr_image`, `get_weather`, `find_places`. `delete_file` is a sync entry in `LOCAL_TOOLS`.
 
-Change v1.1.0 `[UNVERIFIED applied]`: `mcp_client.py` gets `clean_schema()` (drops `$schema` and `additionalProperties`, ensures `type`, `properties`, `required`). `browser_navigate` schema forced to `required: ["url"]` with a `url` property. Tool descriptions cut to 200 chars. `tools.py` empty-url error text: `error: browser_navigate needs url. Resend exactly: {"url": "https://en.wikipedia.org/wiki/India"} with the real link.`
+Change v1.1.0 : `mcp_client.py` gets `clean_schema()` (drops `$schema` and `additionalProperties`, ensures `type`, `properties`, `required`). `browser_navigate` schema forced to `required: ["url"]` with a `url` property. Tool descriptions cut to 200 chars. `tools.py` empty-url error text: `error: browser_navigate needs url. Resend exactly: {"url": "https://en.wikipedia.org/wiki/India"} with the real link.`
 
 Change v1.3.0: `GATED` also contains `remove_skill`. Async special cases before `LOCAL_TOOLS` now also: `use_skill`, `install_skill`.
 
@@ -349,14 +379,14 @@ Change v1.1.0: `_extract` has an image branch. Extensions `.png .jpg .jpeg .webp
 - Key behavioral rules encoded: never invent data; never answer current facts from memory; one question per search; check source scope matches question; saved item count must match request; "DONE. All N items saved" means complete; use `uv` not `pip`; Windows has no awk/sed/cat/grep; write `.py` script instead of `python -c` with control flow; do not ask user to choose between options; no destructive commands unasked.
 - Memory is injected ONCE at startup. `save_memory` writes to disk but the live system prompt is not refreshed until restart.
 
-Change v1.1.0 `[UNVERIFIED applied]`, added to `AGENT_RULES`:
+Change v1.1.0 , added to `AGENT_RULES`:
 - Tools list: `ocr_image: read text from an image file in the workspace. Saves <name>.ocr.md and indexes it. Then use search_docs or read_doc. Text only. Never guess image content. Cannot describe photos.`
 - Tools list: `browser_navigate: always pass url, a full https link. Wikipedia page: https://en.wikipedia.org/wiki/<Title>.`
 - Workflow triage: `Image or screenshot to read: ocr_image, then search_docs or read_doc.`
 - Rules: `Never invent file names. Copy names exactly from list_files. Not sure: call list_files.`
 - Tool schema for `ocr_image.filename`: description `File name copied exactly from list_files output.` (no example name, examples bias the model into copying them)
 
-Change v1.2.0, added to `AGENT_RULES` (all `[UNVERIFIED applied]` except delete_file line, which user confirmed working):
+Change v1.2.0, added to `AGENT_RULES` (all  except delete_file line, which user confirmed working):
 - Tools list: `delete_file: delete one workspace file. User approves each call. Only when the user asks to delete. Copy the name exactly from list_files. Never delete to "clean up" on your own.`
 - Tools list, `research` line extended: `User says "research" or "deep research" in any form: ALWAYS this tool, never web_search.`
 - Workflow triage, FIRST bullet: `User says "research" or "deep research": call research first. Never web_search. This overrides the cheapest-path rule.`
@@ -368,6 +398,13 @@ Change v1.2.0, added to `AGENT_RULES` (all `[UNVERIFIED applied]` except delete_
 Schema text changes: `research` description says "Always use when the user says research or deep research."; `web_search` description appended "Never use when the user asks for research or deep research."
 
 v1.3.0: Tools section gets `use_skill(name)` and `install_skill(source)` lines. `with_skills()` appends `## Skills installed` list and `## ACTIVE SKILL` body to system message at runtime (not in `SYSTEM_PROMPT.py` text).
+
+v1.4.0: Tools section and triage add calculate(expression) for all arithmetic/math.
+
+v1.5.0: Tools section and triage add system_status for local hardware/resource queries.
+v1.5.0 : Tools section and triage add `github` for GitHub repos, files, PRs, issues, and notifications.
+v1.5.0 : Tools section and triage add `recall` for searching past conversations.
+Tools section and triage add manage_schedule for timers, reminders, and recurring cron watchers.
 ---
 
 ## 10. Remote LLM and embedding server (Kaggle notebook)
@@ -463,7 +500,7 @@ Add an `if cmd == ...` branch in `main.py` before the `held = list(pending)` lin
 Ordered roughly by impact. Fix or acknowledge before piling on features.
 
 1. Duplicate-call guard blocks legitimate repeats. `seen` rejects identical `(name, args)` for everything except `run_command`, `browser_snapshot`, `set_browser_mode`. Example: `read_file` after `edit_file` to verify returns `error: identical call already made`; `list_files` after writing a file likewise; `browser_navigate` to same URL after switching modes (system prompt demands this). Consider clearing `seen` on any successful write/edit, or exempting `read_file`, `list_files`, `browser_navigate`.
- **[FIXED in v1.1.0]** `[UNVERIFIED applied]` see Section 5 change note.
+ **[FIXED in v1.1.0]**  see Section 5 change note.
 2. Blocking sync tools freeze the event loop. `run_command`, `upload_doc` (`subprocess.run`), `ingest_doc`, `search_docs`, `web_search` (DDGS) run synchronously inside async `call_tool`. Esc cancel (`task.cancel`) only fires at the next `await`, so Esc does nothing during these. Fix: `await asyncio.to_thread(...)` for sync tools (careful: `ask()` uses `input()`).
 3. Conflicting prompt rules about document summaries. `AGENT_RULES` says `read_doc part 1, 2, 3 in order, max 6 parts` in the Tools section, and later `part 1, then one middle part, then the last part. Max 3 parts.` Small models will pick randomly. Delete one.
 4. Prompt vs code mismatch on contradictory instructions: prompt says "Do not ask the user to choose between options" while also expecting confirmations in tool flow. Low risk, but keep consistent.
@@ -484,8 +521,8 @@ Ordered roughly by impact. Fix or acknowledge before piling on features.
 
 19. Cloudflare quick tunnel kills any request with no response for ~120 s (`524`, `origin_response_timeout`). Hit LLM steps and first OCR call. Mitigated: async OCR job + polling, llama.cpp speed. NOT fixed: agent LLM calls are non-streaming (`stream=True` TODO, Section 17).
 20. Tunnel URLs change every Kaggle run; `.env` edited by hand; Kaggle session limits still kill the agent mid-use.
-21. Small model invents file names (`image1.png`, `image2.png`) after `list_files` already returned real names. Mitigation: `ocr_image` auto-picks the only image, error lists real names, prompt rule, schema description without example `[UNVERIFIED applied]`. Residual risk stays. Code guards beat prompt rules.
-22. Model sends `browser_navigate({})` with empty args, loops until `errs >= 4` abort. Causes: `missing_args` checked key presence only; Playwright schema may lack `required`; weak model with many tools. Fixes in Section 6 and 5 notes `[UNVERIFIED applied]`. Debug script `dbg.py` decides whether model or schema is at fault.
+21. Small model invents file names (`image1.png`, `image2.png`) after `list_files` already returned real names. Mitigation: `ocr_image` auto-picks the only image, error lists real names, prompt rule, schema description without example . Residual risk stays. Code guards beat prompt rules.
+22. Model sends `browser_navigate({})` with empty args, loops until `errs >= 4` abort. Causes: `missing_args` checked key presence only; Playwright schema may lack `required`; weak model with many tools. Fixes in Section 6 and 5 notes . Debug script `dbg.py` decides whether model or schema is at fault.
 23. OCR calls GLM-OCR directly, no layout stage (official stack adds PP-DocLayoutV3 layout analysis + parallel recognition). Dense multi-column pages weaker. Prompt used: `Text Recognition:`. Other prompt type (JSON info extraction) not wired.
 24. OCR OOM history: image 2000 px → `OutOfMemoryError ... Tried to allocate 24.24 GiB` (vision attention). Fixed by thumbnail cap on client (1024) and server (1280/1024), dedicated GPU1, `empty_cache()` after each job. Cap numbers are estimates; lower `OCR_MAX_SIDE` if OOM returns. OOM error text tells model not to retry.
 25. Brain model is text-only. "What is in this photo" unsupported. OCR gives text only. Switching brain to a VLM would need `image_url` content parts and breaks char-based `trim_history` / `budget` math (base64).
@@ -495,15 +532,23 @@ Ordered roughly by impact. Fix or acknowledge before piling on features.
 29. Location accuracy: IP geolocation is city/ISP-hub level. Indian ISPs often resolve to a hub city. `location.json` goes stale if user moves; no auto-refresh. Fix by `/loc <city>`. First IP lookup leaks public IP to ip-api.com.
 30. Tool count dilution: ~30+ tools (Playwright schemas are large). Wrong-tool and empty-args failures (items 21, 22) rise with each tool added. Not mitigated yet. Planned fix: tool routing in `agent.py` (core tools always, group tools only when user message keywords match or group used earlier in chat).
 31. OSM data via Overpass: no ratings/reviews, patchy small-shop coverage in India, public server rate limits (429/504). `find_places` is a nearby-lookup, not a review service.
-32. Forced research regex (`RESEARCH_RE`) is loose: "explain my research paper" also forces `research`. Each forced `research` costs 30–90 s plus embedding calls to Kaggle. `[UNVERIFIED applied]`
+32. Forced research regex (`RESEARCH_RE`) is loose: "explain my research paper" also forces `research`. Each forced `research` costs 30–90 s plus embedding calls to Kaggle. 
 33. Travel planning facts (checked 2026-11-15, web search): Amadeus Self-Service portal decommissioned 17 July 2026, keys deactivated (enterprise contracts only). Kiwi Tequila invitation-only. Skyscanner Flights API partner-gated. Duffel offers search + booking via self-serve signup but test mode returns sandbox data, not real fares. Scrape-style options (Google Flights actors on Apify, Ignav) exist, unofficial or vendor-claimed, free tiers unknown. No free official real-fare API for hobby use.
 34. Booking safety: letting the agent pay is NOT allowed by design (weak model, hallucinated args seen in items 21, 22, prompt injection, no undo). Agreed design: agent searches and returns options plus a deep link (Google Flights / airline URL from IATA codes + dates); human clicks and pays.
-35. Skill body capped at `MAX_BODY = 4000` chars. Extra files and scripts in `skills/<name>/` not readable by agent: `safe_path` is workspace-only. Only SKILL.md body reaches model. `[UNVERIFIED applied]`
-36. Skill routing = embedding sim of user text vs skill `description`, threshold `SIM_MIN = 0.55`. Untuned. Misses or false hits likely. `route()` is sync, runs on embedder (CPU or remote). Adds latency per turn. `[UNVERIFIED applied]`
-37. Skill text is untrusted prompt injection surface. Mitigations: install preview + y/N, size/file limits, binary ext block, symlink/zip-slip checks, `.source.json` sha256 pin (changed files → skipped at load), active block warning text. Scripts in skill only run via `run_command` (user y/N). `[UNVERIFIED applied]`
+35. Skill body capped at `MAX_BODY = 4000` chars. Extra files and scripts in `skills/<name>/` not readable by agent: `safe_path` is workspace-only. Only SKILL.md body reaches model. 
+36. Skill routing = embedding sim of user text vs skill `description`, threshold `SIM_MIN = 0.55`. Untuned. Misses or false hits likely. `route()` is sync, runs on embedder (CPU or remote). Adds latency per turn. 
+37. Skill text is untrusted prompt injection surface. Mitigations: install preview + y/N, size/file limits, binary ext block, symlink/zip-slip checks, `.source.json` sha256 pin (changed files → skipped at load), active block warning text. Scripts in skill only run via `run_command` (user y/N). 
 38. Tool count +2/+3 (`use_skill`, `install_skill`, `remove_skill`). Worsens item 30. 
 39. `ACTIVE["name"]` reset every turn by `route()`. No sticky skill across turns. `use_skill` mid-turn lasts until next user message.
 40. Skill name must equal folder name and match `NAME_RE`. Install fails if `skills/<name>` exists.
+41. `github_tool.py` has no `__all__` and defines top-level `NAME_RE`, `ACTIONS`, `PAGE`, `MAX_FILE`, `UNTRUSTED`. Using `from github_tool import *` in `tools.py` pollutes module namespace and risks colliding with `NAME_RE` in `skills_tool.py`.
+42. Untrusted prompt-injection surface: GitHub repo READMEs, file contents, issue/PR titles and bodies are authored by strangers. Mitigated by `UNTRUSTED` header prepended to every `github()` output and 4200-char cap.
+43. Tool count +1 (`github`), worsening item 30 (tool-count dilution on 9B model).
+44. `recall()` searches `recall/chat_log.jsonl` only, NOT `memory.md` (which remains static in system prompt). `log_turn()` truncates turns to `KEEP = 600` chars and skips `< 12` chars or `error:` outputs.
+45. `recall()` is synchronous (`def recall`) and calls `get_embedder().encode()` inline, freezing the asyncio loop and Windows Esc cancel during remote Kaggle embedding calls (same class as item 2).
+46. `recall_tool.py` has no `__all__`; `from recall_tool import *` in `tools.py` exports `DIR`, `LOG`, `VEC`, `KEEP`, `MIN_CHARS`, `MIN_SIM`. Plain-text `recall/chat_log.jsonl` sits unencrypted on disk; `clear_history()` is ungated if exposed.
+47. Tool count +1 (`recall`), worsening item 30 (tool-count dilution on 9B model).
+
 ---
 
 ## 14. HOW TO UPDATE THIS DOCUMENT (instructions for any AI)
@@ -552,9 +597,16 @@ Compare to Section 3/6; list differences you found; then apply the procedure.
 | Version | Date | Change | Sections touched |
 |---|---|---|---|
 | 1.0.0 | 2026-11-15 | Initial doc generated from full codebase upload (20 files) | all |
-| 1.1.0 | 2026-11-15 | Added OCR (`ocr_tool.py`, `ocr_image`, async job API on Kaggle, image branch in `rag._extract`). New Kaggle notebook `ultron_kaggle_server.ipynb`: llama.cpp `llama-server --jinja`, GGUF/safetensors/model-id loader, 2-GPU split, CUDA 13 workarounds. Agent guard changes `[UNVERIFIED applied]`, browser schema cleanup `[UNVERIFIED applied]`, prompt additions `[UNVERIFIED applied]`. Known issues 19–27 added. | 2, 3, 4, 5, 6, 8, 9, 10.1, 13, 16.1 |
-| 1.2.0 | 2026-11-15 | Added `delete_file` (file_tools, GATED, schema, prompt). Forced research routing in `agent.py` `[UNVERIFIED applied]`. Added `weather_tool.py` (`get_weather`, location helpers, `/loc` command, `location.json`) `[UNVERIFIED applied]`. Added `places_tool.py` (`find_places`, OSM Overpass) `[UNVERIFIED applied]`. Documented travel-search API landscape and no-agent-booking decision. Fixed 1.1.0 paste slips (stray changelog row, missing 16.1, guard order note). Known issues 28–34 added. | 3, 4, 5, 6, 9, 11, 13, 16.1–16.4, 17 |
-| 1.3.0 | 2026-11-19 | Added skills system: `skills_tool.py` (load, parse, embed-route, `use_skill`, `with_skills`), `skills_install.py` (GitHub install, remove). `skills/` dir, `/skills` `/skill-install` `/skill-remove`. Wiring in `main.py`, `agent.py`, `tools.py`, `tools_schema.py`, `SYSTEM_PROMPT.py` `[UNVERIFIED applied]`. Known issues 35–40. | 3, 4, 5, 6, 9, 13, 16.5, 17 |
+| 1.1.0 | 2026-11-15 | Added OCR (`ocr_tool.py`, `ocr_image`, async job API on Kaggle, image branch in `rag._extract`). New Kaggle notebook `ultron_kaggle_server.ipynb`: llama.cpp `llama-server --jinja`, GGUF/safetensors/model-id loader, 2-GPU split, CUDA 13 workarounds. Agent guard changes , browser schema cleanup , prompt additions . Known issues 19–27 added. | 2, 3, 4, 5, 6, 8, 9, 10.1, 13, 16.1 |
+| 1.2.0 | 2026-11-15 | Added `delete_file` (file_tools, GATED, schema, prompt). Forced research routing in `agent.py` . Added `weather_tool.py` (`get_weather`, location helpers, `/loc` command, `location.json`) . Added `places_tool.py` (`find_places`, OSM Overpass) . Documented travel-search API landscape and no-agent-booking decision. Fixed 1.1.0 paste slips (stray changelog row, missing 16.1, guard order note). Known issues 28–34 added. | 3, 4, 5, 6, 9, 11, 13, 16.1–16.4, 17 |
+| 1.3.0 | 2026-11-19 | Added skills system: `skills_tool.py` (load, parse, embed-route, `use_skill`, `with_skills`), `skills_install.py` (GitHub install, remove). `skills/` dir, `/skills` `/skill-install` `/skill-remove`. Wiring in `main.py`, `agent.py`, `tools.py`, `tools_schema.py`, `SYSTEM_PROMPT.py` . Known issues 35–40. | 3, 4, 5, 6, 9, 13, 16.5, 17 |
+| 1.4.0 | 2026-11-19 | Added safe AST math tool calc_tool.py (calculate) with DoS bounds, LLM syntax normalization, schema, and prompt rules. | 3, 6, 9 |
+| 1.4.0 | 2026-11-20 | Added async currency conversion tool (currency_tool.py) using Frankfurter API with dual-endpoint failover and uptime probe. | 3, 5, 6, 9 |
+| 1.5.0 | 2026-11-19 | Added cross-platform system_status tool (status_tool.py) with psutil + OS fallbacks and structured get_system_metrics() helper for Web UI. | 3, 6, 9 |
+| 1.5.0 | 2026-11-20 | Added persistent proactive scheduler and 5-field cron tool (scheduler_tool.py, schedules.json) with voice_out alerts and idle-aware background agent checks. | 3, 4, 5, 6, 9 |
+| 1.4.0 | 2026-11-20 | Added read-only GitHub tool (`github_tool.py`: `github`, `parse_link`, `find_link`), optional `GITHUB_TOKEN`/`GITHUB_REPO` env vars, and known issues 41–43. Wiring in `tools.py`/`tools_schema.py`/`SYSTEM_PROMPT.py`/`main.py` marked `[UNVERIFIED]`. | 3, 4, 5, 6, 9, 13 |
+| 1.5.0 | 2026-11-20 | Added semantic chat-history recall tool (`recall_tool.py`: `recall`, `log_turn`, `clear_history`), `recall/` runtime dir, `RECALL_MIN` env var, and known issues 44–47. Wiring in `tools.py`/`tools_schema.py`/`SYSTEM_PROMPT.py`/`main.py` marked `[UNVERIFIED]`. | 3, 4, 6, 9, 13 |
+
 <!-- APPEND NEW CHANGELOG ROWS ABOVE THIS LINE, KEEP TABLE FORMAT -->
 
 ---
@@ -638,15 +690,15 @@ Limits: no script runner, no skill file reader, one active skill at a time.
 - [ ] Auto-publish tunnel URLs from notebook (private gist / HF dataset), Ultron fetches on start, no manual `.env`
 - [ ] Scanned PDF OCR: rasterize pages (`pypdfium2`) → same OCR endpoint → index
 - [ ] OCR layout stage (PP-DocLayoutV3 / official SDK) for dense pages
-- [ ] Verify and remove `[UNVERIFIED applied]` tags (agent guards, browser schema, prompt lines)
+- [ ] Verify and remove  tags (agent guards, browser schema, prompt lines)
 - [ ] Token-based history budget (replace char budget)
 - [ ] Tool routing in `agent.py`: core tools always, group tools (browser, travel, places, weather, docs, ocr) only on keyword match or earlier use this chat. Fixes tool-count dilution (Section 13 item 30)
 - [ ] After routing: one file per tool (`tools/<name>.py`: function + schema + prompt line) with auto-registry, so adding a tool is not 4 file edits
 - [ ] Travel: flight search source decision, deep-link builder (`search_flights` returns options + URL), no booking
-- [ ] Verify and remove `[UNVERIFIED applied]` tags: forced research, weather/location, places, `/loc`
+- [ ] Verify and remove  tags: forced research, weather/location, places, `/loc`
 - [ ] Tighten `RESEARCH_RE` if false positives appear
 - [ ] Optional precise location via Windows Location API (needs OS permission, API not verified)
-- [ ] Verify and remove `[UNVERIFIED applied]` tags: skills wiring (main, agent, tools, schema, prompt)
+- [ ] Verify and remove  tags: skills wiring (main, agent, tools, schema, prompt)
 - [ ] Tune `SIM_MIN` from real `[skill] best=... sim=...` logs
 - [ ] Let agent read skill extra files (read-only `skills/<name>/` reader)
 - [ ] Sticky active skill across turns (optional)
