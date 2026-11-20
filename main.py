@@ -23,6 +23,7 @@ from voice_in import STT
 from recall_tool import log_turn, clear_history
 from github_tool import find_link
 from scheduler_tool import start_scheduler, stop_scheduler
+from telegram_tool import start_telegram, stop_telegram, AGENT_LOCK
 
 STOP_WORDS = {"stop", "/stop", "quiet", "enough", "shut up"}
 VOICE_OFF = {"voice off", "stop listening", "type mode"}
@@ -67,6 +68,7 @@ async def main():
                 get_system_prompt=lambda: messages[0]["content"],
                 run_agent_fn=run_agent,
             )
+            start_telegram(messages[0]["content"])
             try:
                 while True:
                     if voice:
@@ -177,10 +179,10 @@ async def main():
                     n = len(messages)
                     messages.append({"role": "user", "content": user})
                     print(c("think", " [Esc = cancel]"))
-                    answer, cancelled = await run_cancellable(run_agent(messages))
                     agent_busy = True
                     try:
-                        reply = await run_cancellable(run_agent(messages))
+                        async with AGENT_LOCK:
+                            answer, cancelled = await run_cancellable(run_agent(messages))
                     finally:
                         agent_busy = False
                     if cancelled:
@@ -202,6 +204,7 @@ async def main():
                 if stt:
                     await stt.close()
     finally:
+        await stop_telegram()
         if obs:
             obs.terminate()
         stop_scheduler()

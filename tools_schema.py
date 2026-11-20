@@ -533,4 +533,63 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function", 
+        "function": {
+                "name": "air_quality",
+                "description": "Air quality now (US AQI, PM2.5, PM10, ozone) plus today's and tomorrow's worst and best hours. Empty location = the user's saved location.",
+                "parameters": {"type": "object", "properties": {
+                "location": {"type": "string", "description": "City name. Optional."}}, "required": []
+            }
+        }
+    },
+    {"type": "function", "function": {
+  "name": "sun_times",
+  "description": "Sunrise, sunset, daylight length, first and last light, time until sunset, moon phase. Empty location = the user's saved location.",
+  "parameters": {"type": "object", "properties": {
+    "location": {"type": "string", "description": "City name. Optional."},
+    "days": {"type": "integer", "description": "1 to 7. Default 2."}}, "required": []}}},
+    {
+        "type": "function",
+        "function": {
+            "name": "youtube_transcript",
+            "description": "Fetch YouTube video transcript locally, save to workspace, and index for summary or Q&A.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "Full YouTube video URL or 11-char video ID."},
+                    "lang": {"type": "string", "description": "Preferred ISO language code, default en."},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_telegram",
+            "description": "Send a Telegram message to the user's configured Telegram chat.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "Message text to send to user on Telegram."},
+                },
+                "required": ["text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_telegram",
+            "description": "Read recent incoming messages received from the user's Telegram chat.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "description": "Number of recent messages to return (1-20, default 5)."},
+                },
+                "required": [],
+            },
+        },
+    },
 ]

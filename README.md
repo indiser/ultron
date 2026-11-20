@@ -45,6 +45,9 @@ main.py
         │     ├── github_tool.py    ← read-only GitHub API (repo, tree, file, PRs, issues)
         │     ├── currency_tool.py  ← live/historical currency conversion (Frankfurter/ECB)
         │     ├── scheduler_tool.py ← one-shot reminders + cron jobs (schedules.json)
+        │     ├── air_sun_tool.py   ← air quality (Open-Meteo/CAMS) + sun/moon times (astral)
+        │     ├── youtube_tool.py   ← YouTube transcript fetch, save to workspace, index into RAG
+        │     ├── telegram_tool.py  ← Telegram bot: send messages + background polling loop
         │     └── mcp_client.py     ← MCP servers (time, Scrapling) + Playwright browser
         ├── voice_out.py            ← offline TTS pipeline (PocketTTS + sentence streaming + Stream class)
         ├── smoke.py                ← automated 20-scenario test suite (easy/med/hard/extreme)
@@ -110,6 +113,15 @@ A hot-loadable plugin system that injects domain-specific instructions into the 
 
 `skills_install.py` handles installing skills from GitHub. It downloads the repo as a zip, validates the SKILL.md front matter, enforces size limits (30 MB zip, 5 MB unpacked, 100 files), rejects binary and symlink entries, shows the user the skill description and instructions, and requires explicit `y/N` approval before writing to disk. A SHA-256 tree hash is stored in `.source.json` on install; if any file changes after install the skill is skipped on load as tampered. Skills can be removed via `/skill remove <name>`.
 
+**Air Quality & Sun Times** (`air_sun_tool.py`)
+Two tools in one module, both free and no API key required. `air_quality` fetches current US AQI, PM2.5, PM10, ozone, NO2, SO2, and CO from the Open-Meteo Air Quality API (CAMS modelled data), plus today's and tomorrow's worst and best hours. `sun_times` computes sunrise, sunset, daylight length, dawn, dusk, time until next sunrise/sunset, and moon phase entirely offline using the `astral` library — no network call beyond the location lookup. Both use the same location resolution stack as `get_weather`: explicit argument → saved `location.json` → IP geolocation.
+
+**YouTube Transcripts** (`youtube_tool.py`)
+Fetches the transcript of any YouTube video (watch URLs, shorts, live, youtu.be links, or bare 11-char video IDs) via `youtube-transcript-api`. The transcript is saved to `yt_<id>.md` in the workspace and immediately indexed into the RAG store so it can be searched or summarised with `search_docs` / `read_doc`. Results are cached on disk — if the file already exists it is not re-fetched. Returns a 1800-char preview plus the index confirmation. Supports non-English transcripts with an `en` fallback.
+
+**Telegram Integration** (`telegram_tool.py`)
+Bidirectional Telegram bot that runs as a background asyncio task alongside the terminal loop. At startup `start_telegram()` launches a long-poll loop against the Bot API — incoming messages from the configured chat ID are routed through the full agent loop and the reply is sent back via `send_telegram`. The terminal and Telegram share the same `AGENT_LOCK` so only one turn runs at a time. Incoming messages are also appended to the recall log. `read_telegram` lets the agent inspect recent incoming messages from within a turn. Requires `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`; silently disabled if either is missing.
+
 **Conversation Recall** (`recall_tool.py`)
 Persists every finished user/assistant turn to `recall/chat_log.jsonl` and lazily builds a matching embedding index in `recall/vecs.npy`. The `recall` tool searches past sessions by semantic similarity — it embeds the query, scores all stored turns, and returns the top matches with timestamps and paired context. Embedding is incremental: only new turns are encoded on each call, with a 60-second deadline to avoid blocking on large backlogs. A minimum similarity threshold (`RECALL_MIN`, default 0.45, tunable via `.env`) filters noise. `clear_history()` wipes both files. The `/forget` slash command calls it directly from the terminal.
 
@@ -171,6 +183,10 @@ BRAIN_LLM_BASE_URL=<openai-compatible-base-url>
 # Optional: remote embeddings (falls back to local sentence-transformers)
 # Required for OCR and recall
 EMBED_BASE_URL=<embedding-endpoint>
+
+# Optional: Telegram bot (disabled if not set)
+TELEGRAM_BOT_TOKEN=<your-bot-token>
+TELEGRAM_CHAT_ID=<your-chat-id>
 
 # Optional: built-in voice input (faster-whisper WebSocket)
 STT_WS_URL=<wss://your-tunnel.trycloudflare.com/ws>
@@ -247,6 +263,11 @@ These are handled directly in the input loop, outside the agent:
 | `github` | Read-only GitHub: repo summary, folder tree, file text, PR/issue details, personal PR/issue lists |
 | `convert_currency` | Convert between currencies using live or historical ECB rates (Frankfurter API) |
 | `manage_schedule` | Create one-shot reminders or recurring cron jobs; list, toggle, remove, or run immediately |
+| `air_quality` | Current US AQI, PM2.5, PM10, ozone and hourly forecast via Open-Meteo/CAMS |
+| `sun_times` | Sunrise, sunset, daylight length, dawn/dusk, moon phase — computed offline via astral |
+| `youtube_transcript` | Fetch YouTube transcript, save to workspace as `.md`, and index into RAG |
+| `send_telegram` | Send a message to the user's configured Telegram chat |
+| `read_telegram` | Read recent incoming messages from the Telegram polling inbox |
 | `use_skill` | Activate an installed skill by name |
 | `install_skill` | Install a skill from a GitHub repo (user approval required) |
 | `set_browser_mode` | Switch browser between headless and visible |
@@ -283,6 +304,9 @@ This is version 0.1.0. It is a proof of concept, not a production system.
 - The scheduler persists jobs to `schedules.json`. Jobs survive restarts but are tied to the local clock — if the machine is off when a one-shot reminder fires, it will be spoken on next startup if it missed by less than 1 hour.
 - GitHub integration is read-only. `my_prs`, `review_requests`, `my_issues`, and `notifications` require `GITHUB_TOKEN` in `.env`. Notifications require a classic token with the `notifications` scope — fine-grained tokens do not support it.
 - Currency conversion uses the Frankfurter API (ECB rates). Not all currency pairs are supported — pairs outside the ECB basket fall back to `web_search`.
+- Air quality data is modelled by CAMS via Open-Meteo, not a street-level sensor. Numbers differ from Indian apps that use the CPCB scale.
+- `youtube_transcript` requires `youtube-transcript-api` (`uv add youtube-transcript-api`). Transcripts are not available for all videos (disabled captions, private videos, or IP blocks).
+- Telegram polling requires `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`. Only messages from the configured chat ID are processed. The terminal and Telegram share one agent lock — they do not run concurrently.
 
 ---
 
@@ -308,7 +332,9 @@ This is version 0.1.0. It is a proof of concept, not a production system.
 Core: `openai`, `mcp`, `ddgs`, `scrapling`, `sentence-transformers`, `numpy`, `python-dotenv`
 RAG: `chromadb`, `pypdf`, `python-docx`
 OCR: `pillow`, `httpx`
-Weather/Places/Currency/GitHub: `httpx`
+Weather/Places/Currency/GitHub/Telegram: `httpx`
+Sun/Moon: `astral`, `tzdata` (Windows)
+YouTube: `youtube-transcript-api`
 Skills: `pyyaml`
 Browser: `@playwright/mcp` (via npx), `obscura`
 Audio: `sounddevice`, `soundfile`, `pocket-tts`, `torch`, `websockets`

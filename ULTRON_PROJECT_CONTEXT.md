@@ -1,5 +1,5 @@
 <!--
-AI-CONTEXT-DOC | project: Ultron | doc-version: 1.5.0 | last-updated: 2026-11-20
+AI-CONTEXT-DOC | project: Ultron | doc-version: 1.6.0 | last-updated: 2026-11-20
 Update rules are in SECTION 14. Never overwrite; append.
 -->
 
@@ -76,6 +76,9 @@ project/
 ├── weather_tool.py      # NEW v1.2.0: get_weather, location helpers (IP lookup, geocode, save/load) [UNVERIFIED applied]
 ├── places_tool.py       # NEW v1.2.0: find_places via OpenStreetMap Overpass [UNVERIFIED applied]
 ├── scheduler_tool.py    # NEW: manage_schedule() + background async cron/reminder loop with voice_out alerts & proactive agent checks
+├── air_sun_tool.py      # NEW v1.6.0: air_quality() (Open-Meteo CAMS) + sun_times() (offline astral)
+├── telegram_tool.py     # NEW v1.6.0: send_telegram(), read_telegram(), background getUpdates long-poll bridge + AGENT_LOCK
+├── youtube_tool.py      # NEW v1.6.0: youtube_transcript(), find_yt_link() local YouTube caption fetcher + RAG index
 ├── schedules.json       # (runtime) persisted one-shot reminders and recurring cron jobs
 ├── skills_tool.py       # NEW v1.3.0: load_skills(), route(), use_skill(), with_skills(), skills_block(), active_block(), tree_hash(), parse_text() [UNVERIFIED applied]
 ├── github_tool.py       # NEW v1.4.0: github() read-only GitHub API tool (repo, tree, read, item, PRs/issues/notifications) + link parser
@@ -129,6 +132,14 @@ main → scheduler_tool (start_scheduler, stop_scheduler)scheduler_tool → conf
 tools → recall_tool (recall)
 main → recall_tool (log_turn)
 recall_tool → config (QUERY_PREFIX), embed (get_embedder), numpy
+tools → youtube_tool (youtube_transcript)
+youtube_tool → config (safe_path); rag (lazy import of ingest_doc)
+tools → telegram_tool (send_telegram, read_telegram)
+main → telegram_tool (start_telegram, stop_telegram, AGENT_LOCK)
+interrupt → telegram_tool (TELEGRAM_ACTIVE, lazy import inside ask)
+telegram_tool → text_ui (c), httpx; agent (lazy run_agent); recall_tool (lazy log_turn)
+tools → air_sun_tool (air_quality, sun_times)
+air_sun_tool → weather_tool (geocode, ip_location, load_location, save_location), httpx, astral
 
 ```
 `tools.py` and `shell_tool.py`/`file_tools.py` use `from X import *`. Watch for name collisions when adding module-level names.
@@ -168,6 +179,8 @@ Env vars:
 | `GITHUB_TOKEN` | github_tool.py | optional fine-grained read-only PAT (raises rate limit 60→5000/hr; needed for `my_prs`, `review_requests`, `my_issues`, `notifications` [classic token only], and private repos) |
 | `GITHUB_REPO` | github_tool.py | optional default `owner/name` repo when none passed |
 | `RECALL_MIN` | recall_tool.py | min cosine similarity threshold for `recall()` hits (default `0.45`, untuned) |
+| `TELEGRAM_BOT_TOKEN` | telegram_tool.py | Telegram Bot API token from `@BotFather` (enables two-way polling + `send_telegram`) |
+| `TELEGRAM_CHAT_ID` | telegram_tool.py | authorized numeric Telegram chat ID; messages from any other chat ID are ignored |
 
 Note v1.1.0: `EMBED_BASE_URL` now also hosts OCR. Client builds OCR URL as `EMBED_BASE_URL.rstrip("/") + "/ocr"` then `/start` and `/<id>`. No separate OCR env var.
 Note v1.1.0: `BRAIN_LLM_NAME` must equal llama-server `--alias`. Notebook sets alias = HF repo id (or GGUF file stem for local paths) and prints the full `.env` block at the end of cell 8.
@@ -191,6 +204,8 @@ v1.3.0: no new env vars. New deps: `pyyaml`, `numpy`, `httpx`.
 3. Build system message: `build_prompt(memory=load_memory(), today=<iso date>, shell="Windows cmd.exe" or "bash")`.
 4. REPL loop: `read_you()` → handle commands → else append user message → `run_cancellable(run_agent(messages))`.
 5. On exit: terminate obscura.
+
+Change v1.6.0: after `start_scheduler()`, `start_telegram(messages[0]["content"])` launches background `getUpdates` long-poll task using isolated `tg_messages` history (locked to `TELEGRAM_CHAT_ID`; `/clear` or `/reset` resets Telegram history). Both terminal REPL `run_agent` and incoming Telegram turns acquire `AGENT_LOCK` so they never collide on the LLM endpoint; `start_scheduler` checks `agent_busy or AGENT_LOCK.locked()`. While `TELEGRAM_ACTIVE` is True, `interrupt.ask()` immediately returns `"n"` (auto-declining `GATED` tools without blocking terminal `input()`). Shutdown calls `await stop_telegram()`.
 
 Change v1.3.0 : after `build_prompt`, `load_skills()` then `messages[0]["content"] = with_skills(messages[0]["content"])`. Per user turn, before `run_agent`: `ACTIVE["name"] = route(user_text)` (in `asyncio.to_thread`), then `with_skills` again. `run_agent` calls `with_skills` at top of each step so `use_skill` mid-turn takes effect.
 
@@ -313,6 +328,11 @@ Defined in `tools_schema.py` (`TOOL_SCHEMAS`, OpenAI function format). Implement
 | `manage_schedule(action, ...)` | scheduler_tool (async, special-cased in call_tool) | JSON-persisted one-time reminders ('15m', '18:30', ISO) and 5-field cron jobs; mode='notify' speaks via voice_out.speak, mode='agent' runs isolated silent check when REPL idle and speaks only on alert |
 | `github(action, repo="", number=None, path="", part=None)` | github_tool (async, special-cased in `call_tool` `[UNVERIFIED]`) | read-only GitHub REST GET (`repo`, `tree`, `read`, `item`, `my_prs`, `review_requests`, `my_issues`, `notifications`); parses `github.com` repo/tree/blob/PR/issue URLs; fuzzy-matches own repo names for voice typos; `read` paginates at `PAGE = 3500` chars (`MAX_FILE = 300_000` B); prepends `UNTRUSTED` warning and caps output at 4200 chars |
 | `recall(query, days_back=None, limit=5)` | recall_tool (`[UNVERIFIED]` in `LOCAL_TOOLS`) | semantic search over `recall/chat_log.jsonl` (does not search `memory.md`); lazy-embeds unindexed turns in 64-row chunks w/ 60s tunnel-safe budget into `recall/vecs.npy`; pairs user+assistant turns; output capped at 2500 chars |
+| `youtube_transcript(url, lang="en")` | youtube_tool (async, special-cased in `call_tool`) | fetches captions locally via `youtube-transcript-api` (`asyncio.to_thread`), saves `yt_<id>.md` in workspace, indexes with `rag.ingest_doc`, returns 1800-char preview + `read_doc`/`search_docs` hint |
+| `send_telegram(text)` | telegram_tool (async, special-cased in `call_tool`) | sends text to `TELEGRAM_CHAT_ID` via Telegram Bot API `sendMessage` (splits at 4000 chars) |
+| `read_telegram(limit=5)` | telegram_tool (`LOCAL_TOOLS`) | returns up to 20 recent incoming Telegram messages buffered in memory (`INBOX` deque) during current session |
+| `air_quality(location="")` | air_sun_tool (async, special-cased in `call_tool`) | current US AQI, PM2.5/PM10/O3/NO2/SO2/CO, and today/tomorrow worst/best AQI via Open-Meteo CAMS (`air-quality-api.open-meteo.com`, no key). Empty location = saved location (or IP lookup, saved). |
+| `sun_times(location="", days=2)` | air_sun_tool (async, special-cased in `call_tool`) | offline `astral` calculation for sunrise, sunset, dawn, dusk, daylight duration, live countdown, and moon phase (`days` clamped 1–7). Empty location = saved location. |
 
 ### MCP tools (registered at runtime in `mcp_client.py`)
 - `get_current_time` from `mcp-server-time`.
@@ -332,6 +352,10 @@ Update v1.2.0: async special cases before `LOCAL_TOOLS` are now `research`, `ing
 Change v1.1.0 : `mcp_client.py` gets `clean_schema()` (drops `$schema` and `additionalProperties`, ensures `type`, `properties`, `required`). `browser_navigate` schema forced to `required: ["url"]` with a `url` property. Tool descriptions cut to 200 chars. `tools.py` empty-url error text: `error: browser_navigate needs url. Resend exactly: {"url": "https://en.wikipedia.org/wiki/India"} with the real link.`
 
 Change v1.3.0: `GATED` also contains `remove_skill`. Async special cases before `LOCAL_TOOLS` now also: `use_skill`, `install_skill`.
+
+Update v1.6.0: `youtube_transcript` added to async special cases before `LOCAL_TOOLS` in `call_tool`.
+Update v1.6.0: `send_telegram` added to async special cases before `LOCAL_TOOLS` in `call_tool`; `read_telegram` added to `LOCAL_TOOLS`.
+Update v1.6.0: `air_quality` and `sun_times` added to async special cases before `LOCAL_TOOLS` in `call_tool`.
 
 ---
 
@@ -405,6 +429,10 @@ v1.5.0: Tools section and triage add system_status for local hardware/resource q
 v1.5.0 : Tools section and triage add `github` for GitHub repos, files, PRs, issues, and notifications.
 v1.5.0 : Tools section and triage add `recall` for searching past conversations.
 Tools section and triage add manage_schedule for timers, reminders, and recurring cron watchers.
+v1.6.0: Tools section and triage add `youtube_transcript` for YouTube links (before `web_search` or browser tools).
+v1.6.0: Tools section and triage add `send_telegram` (notify/message user on Telegram) and `read_telegram` (inspect recent incoming Telegram messages).
+v1.6.0: Tools section, triage, and rules add `air_quality` (note modelled CAMS US AQI vs Indian CPCB scale) and `sun_times` (never `web_search` for AQI or sun/moon times).
+
 ---
 
 ## 10. Remote LLM and embedding server (Kaggle notebook)
@@ -548,6 +576,9 @@ Ordered roughly by impact. Fix or acknowledge before piling on features.
 45. `recall()` is synchronous (`def recall`) and calls `get_embedder().encode()` inline, freezing the asyncio loop and Windows Esc cancel during remote Kaggle embedding calls (same class as item 2).
 46. `recall_tool.py` has no `__all__`; `from recall_tool import *` in `tools.py` exports `DIR`, `LOG`, `VEC`, `KEEP`, `MIN_CHARS`, `MIN_SIM`. Plain-text `recall/chat_log.jsonl` sits unencrypted on disk; `clear_history()` is ungated if exposed.
 47. Tool count +1 (`recall`), worsening item 30 (tool-count dilution on 9B model).
+48. `youtube_transcript` relies on unofficial `youtube-transcript-api` scraping: runs locally on home IP (cloud/Kaggle IPs blocked), breaks if YouTube changes player endpoints, fails on videos with disabled captions, and adds +1 tool to 9B model tool-count dilution (item 30).
+49. Telegram bridge (`telegram_tool.py`) polls text messages only (`msg.get("text")`); photos, voice notes, and documents sent on Telegram are ignored, and `INBOX` is in-memory only (cleared on restart). `AGENT_LOCK` serializes terminal and Telegram turns (one waits while the other runs), `GATED` tools auto-decline during Telegram turns (`TELEGRAM_ACTIVE`), and adding `send_telegram`/`read_telegram` adds +2 tools to 9B tool-count dilution (item 30).
+50. `air_quality` returns Copernicus CAMS modelled data on the US AQI scale, which differs from local street sensors and India's CPCB AQI scale; `sun_times` requires `astral` (and `tzdata` on Windows for `ZoneInfo`). Adds +2 tools to 9B tool-count dilution (item 30).
 
 ---
 
@@ -606,6 +637,9 @@ Compare to Section 3/6; list differences you found; then apply the procedure.
 | 1.5.0 | 2026-11-20 | Added persistent proactive scheduler and 5-field cron tool (scheduler_tool.py, schedules.json) with voice_out alerts and idle-aware background agent checks. | 3, 4, 5, 6, 9 |
 | 1.4.0 | 2026-11-20 | Added read-only GitHub tool (`github_tool.py`: `github`, `parse_link`, `find_link`), optional `GITHUB_TOKEN`/`GITHUB_REPO` env vars, and known issues 41–43. Wiring in `tools.py`/`tools_schema.py`/`SYSTEM_PROMPT.py`/`main.py` marked `[UNVERIFIED]`. | 3, 4, 5, 6, 9, 13 |
 | 1.5.0 | 2026-11-20 | Added semantic chat-history recall tool (`recall_tool.py`: `recall`, `log_turn`, `clear_history`), `recall/` runtime dir, `RECALL_MIN` env var, and known issues 44–47. Wiring in `tools.py`/`tools_schema.py`/`SYSTEM_PROMPT.py`/`main.py` marked `[UNVERIFIED]`. | 3, 4, 6, 9, 13 |
+| 1.6.0 | 2026-11-20 | Added local YouTube transcript tool (`youtube_tool.py`: `youtube_transcript`, `find_yt_link`) saving `yt_<id>.md` + RAG indexing, and known issue 48. | 3, 6, 9, 13, 16.6 |
+| 1.6.0 | 2026-11-20 | Added two-way Telegram bridge (`telegram_tool.py`: `send_telegram`, `read_telegram`, `start_telegram`, `stop_telegram`, `AGENT_LOCK`, `TELEGRAM_ACTIVE`), env vars `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`, `interrupt.ask()` auto-decline guard, and known issue 49. | 3, 4, 5, 6, 9, 13, 15, 16.7 |
+| 1.6.0 | 2026-11-20 | Added `air_sun_tool.py` (`air_quality` via Open-Meteo CAMS, `sun_times` via `astral`), deps `astral`/`tzdata`, and known issue 50. | 3, 6, 9, 13, 15, 16.8 |
 
 <!-- APPEND NEW CHANGELOG ROWS ABOVE THIS LINE, KEEP TABLE FORMAT -->
 
@@ -680,6 +714,29 @@ Skill format: folder `skills/<name>/SKILL.md` with YAML front matter (`name`, `d
 
 Flow: user msg → `route()` → `ACTIVE` → `with_skills` → system msg. Model can also call `use_skill(name)` from the installed list.
 Limits: no script runner, no skill file reader, one active skill at a time.
+
+## 16.6 YouTube transcript (v1.6.0)
+
+File: `youtube_tool.py`. `youtube_transcript(url, lang="en")`.
+- Extracts 11-char video ID from `youtube.com/watch`, `youtu.be/`, `/shorts/`, `/live/`, `/embed/`, or raw ID.
+- Runs `YouTubeTranscriptApi().fetch()` inside `asyncio.to_thread()` on local home IP (never Kaggle; cloud IPs blocked).
+- Formats `[MM:SS]` / `[HH:MM:SS]` lines, caches to `workspace/yt_<id>.md`, indexes via lazy `rag.ingest_doc`.
+- Returns `1800`-char preview so short videos summarize immediately while long videos stay inside char history budget via `read_doc`/`search_docs`.
+
+## 16.7 Telegram two-way bridge (v1.6.0)
+
+Files: `telegram_tool.py`, wiring in `main.py`, `interrupt.py`, `tools.py`, `tools_schema.py`, `SYSTEM_PROMPT.py`.
+- Outbound (`send_telegram(text)`): POSTs JSON to `https://api.telegram.org/bot<TOKEN>/sendMessage` for `TELEGRAM_CHAT_ID`, splitting messages >4000 chars.
+- Inbound (`_poll_loop`): deletes any active webhook (`deleteWebhook`), then runs 25 s `getUpdates` long polling (`allowed_updates=["message"]`). Ignores empty text or any `chat_id != TELEGRAM_CHAT_ID`.
+- Isolation & safety: maintains separate `tg_messages` conversation list (`/clear` or `/reset` clears turns), logs turns via `recall_tool.log_turn`, buffers last 20 messages in `INBOX` for `read_telegram()`, serializes execution with terminal REPL via `AGENT_LOCK`, and sets `TELEGRAM_ACTIVE = True` so `interrupt.ask()` returns `"n"` instead of stalling terminal `input()`.
+
+## 16.8 Air quality and sun/moon times (v1.8.0)
+
+File: `air_sun_tool.py`. Deps: `astral`, `tzdata`.
+- Location resolution matches `weather_tool.py`: explicit `location` arg (one-shot geocode, not saved) → `location.json` → IP lookup (saved).
+- `air_quality(location="")`: queries `air-quality-api.open-meteo.com/v1/air-quality` (`forecast_days=2`) for current `us_aqi` and 6 pollutants plus hourly today/tomorrow min/max.
+- `sun_times(location="", days=2)`: computes sunrise, sunset, dawn, dusk, daylight duration, live time-until-rise/set, and moon phase locally via `astral` (`days` clamped 1–7).
+```[cite: 1, 5]
 ---
 
 ## 17. Roadmap / planned features (append only)

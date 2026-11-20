@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "astral>=3.2",
     "asyncio>=4.0.0",
     "chromadb>=1.5.9",
     "ddgs>=9.16.1",
@@ -25,4 +26,5 @@ dependencies = [
     "sounddevice",
     "soundfile",
     "websockets>=17.4",
+    "youtube-transcript-api>=1.2.5",
 ]

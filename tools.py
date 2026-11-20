@@ -19,6 +19,9 @@ import asyncio
 from github_tool import github
 from currency_tool import *
 from scheduler_tool import *
+from air_sun_tool import air_quality, sun_times
+from youtube_tool import youtube_transcript
+from telegram_tool import send_telegram, read_telegram
 
 def set_browser_mode(mode: str) -> str:
     if mode not in ("headless", "visible"):
@@ -47,6 +50,7 @@ LOCAL_TOOLS = {
     "remove_doc": remove_doc,
     "calculate": calculate,
     "system_status": system_status,
+    "read_telegram": read_telegram
 }
 
 GATED = {"browser_click", "browser_type", "browser_fill_form", "browser_press_key", "remove_doc", "delete_file"}
@@ -66,10 +70,18 @@ async def call_tool(name: str, args: dict) -> str:
         return LOCAL_TOOLS[name](**args)
     if name == "get_weather":
         return await get_weather(**args)
+    if name == "youtube_transcript":
+        return await youtube_transcript(**args)
     if name == "use_skill":
         return await use_skill(**args)
+    if name == "send_telegram":
+        return await send_telegram(**args)
     if name == "find_places":
         return await find_places(**args)
+    if name == "air_quality":
+        return await air_quality(**args)
+    if name == "sun_times":
+        return await sun_times(**args)
     if name == "convert_currency":
         return await convert_currency(
             amount=args.get("amount", 1),

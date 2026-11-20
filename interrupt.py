@@ -9,7 +9,17 @@ if os.name == "nt":
 _asking = threading.Event()
 
 
+# def ask(prompt: str) -> str:
+#     _asking.set()
+#     try:
+#         return input(prompt)
+#     finally:
+#         _asking.clear()
+
 def ask(prompt: str) -> str:
+    import telegram_tool
+    if telegram_tool.TELEGRAM_ACTIVE:
+        return "n"
     _asking.set()
     try:
         return input(prompt)
