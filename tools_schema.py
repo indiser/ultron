@@ -389,7 +389,7 @@ TOOL_SCHEMAS = [
         "function": {
             "name": "install_skill",
             "description": (
-                "Install an agent skill from GitHub when the user gives a link or owner/repo. "
+                "Install a SKILL package (folder with SKILL.md) only when user says 'skill'. Never for general GitHub repos. For repos use the repo tool."
                 "Shows the user the skill and asks approval. Copy source exactly from the user's message. "
                 "Never install on your own."
             ),
@@ -543,12 +543,21 @@ TOOL_SCHEMAS = [
             }
         }
     },
-    {"type": "function", "function": {
-  "name": "sun_times",
-  "description": "Sunrise, sunset, daylight length, first and last light, time until sunset, moon phase. Empty location = the user's saved location.",
-  "parameters": {"type": "object", "properties": {
-    "location": {"type": "string", "description": "City name. Optional."},
-    "days": {"type": "integer", "description": "1 to 7. Default 2."}}, "required": []}}},
+    {
+        "type": "function", 
+        "function": {
+            "name": "sun_times",
+            "description": "Sunrise, sunset, daylight length, first and last light, time until sunset, moon phase. Empty location = the user's saved location.",
+            "parameters": {
+                "type": "object", 
+                "properties": {
+                    "location": {"type": "string", "description": "City name. Optional."},
+                    "days": {"type": "integer", "description": "1 to 7. Default 2."}
+                    }, 
+                    "required": []
+            }
+        }
+    },
     {
         "type": "function",
         "function": {
@@ -591,5 +600,22 @@ TOOL_SCHEMAS = [
                 "required": [],
             },
         },
+    },
+    {
+        "type": "function", 
+        "function": {
+            "name": "repo",
+            "description": "Work with GitHub repos locally. Flow: clone, info (read README), setup (install deps in venv), run (shell command inside repo folder). Never run before reading info. Never use for non-GitHub URLs.",
+            "parameters": {
+                "type": "object", 
+                "properties": {
+                    "action": {"type": "string", "enum": ["clone", "list", "info", "setup", "run", "remove"]},
+                    "url": {"type": "string", "description": "https://github.com/owner/name, clone only"},
+                    "name": {"type": "string", "description": "folder name from clone or list"},
+                    "command": {"type": "string", "description": "shell command, run only"},
+                    "timeout": {"type": "integer"}},
+                    "required": ["action"]
+            }
+        }
     },
 ]

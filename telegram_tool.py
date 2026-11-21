@@ -4,6 +4,7 @@ from datetime import datetime
 import os
 import httpx
 from text_ui import c
+import time
 
 __all__ = ["send_telegram", "read_telegram", "start_telegram", "stop_telegram", "TELEGRAM_ACTIVE", "AGENT_LOCK"]
 
@@ -12,7 +13,7 @@ AGENT_LOCK = asyncio.Lock()
 _TASK: asyncio.Task | None = None
 MAX_CHUNK = 4000
 INBOX: deque[dict] = deque(maxlen=20)
-
+MAX_AGE = 600
 
 def read_telegram(limit: int = 5) -> str:
     n = max(1, min(int(limit or 5), 20))
@@ -51,8 +52,14 @@ async def send_telegram(text: str) -> str:
     return "sent: Telegram message delivered."
 
 
+def tg_print(msg: str) -> None:
+    print("\r" + " " * 100 + "\r" + msg)
+    print(c("info", "you: "), end="", flush=True)
+
 async def _handle_incoming(user_text: str, tg_messages: list[dict]) -> None:
     global TELEGRAM_ACTIVE
+    from text_ui import SOURCE
+    SOURCE.set("tg")
     from agent import run_agent
 
     if user_text.strip().lower() in ("/clear", "/reset"):
@@ -63,9 +70,19 @@ async def _handle_incoming(user_text: str, tg_messages: list[dict]) -> None:
     async with AGENT_LOCK:
         TELEGRAM_ACTIVE = True
         try:
-            tg_messages.append({"role": "user", "content": user_text})
-            reply = await run_agent(tg_messages)
+            tg_messages.append({
+                "role": "user",
+                "content": "[system: message came from Telegram. Your final reply is sent to Telegram "
+                           "automatically. Do NOT call send_telegram for it.]\n" + user_text,
+            })
+            try:
+                reply = await run_agent(tg_messages)
+            except Exception as e:
+                reply = f"error: {e}"
             tg_messages.append({"role": "assistant", "content": reply})
+            # keep system prompt + last 40 msgs
+            if len(tg_messages) > 41:
+                del tg_messages[1:-40]
         finally:
             TELEGRAM_ACTIVE = False
 
@@ -80,7 +97,7 @@ async def _handle_incoming(user_text: str, tg_messages: list[dict]) -> None:
     if res.startswith("error:"):
         print(c("error", f"[telegram] {res}"))
     else:
-        print(c("info", f"[telegram] replied: {reply[:80]}"))
+        tg_print(c("info", f"[telegram] replied: {reply[:200]}"))
 
 
 async def _poll_loop(system_prompt: str) -> None:
@@ -123,10 +140,11 @@ async def _poll_loop(system_prompt: str) -> None:
                     text = (msg.get("text") or "").strip()
                     if not text or chat_id != allowed_chat:
                         continue
-                    if not text or chat_id != allowed_chat:
+                    if time.time() - msg.get("date", 0) > MAX_AGE:
+                        await send_telegram(f"Skipped old message (bot was offline): {text[:80]}")
                         continue
                     INBOX.append({"time": datetime.now().strftime("%H:%M:%S"), "text": text})
-                    print(c("info", f"[telegram] incoming: {text[:80]}"))
+                    tg_print(c("info", f"[telegram] incoming: {text[:80]}"))
                     await _handle_incoming(text, tg_messages)
             except asyncio.CancelledError:
                 break

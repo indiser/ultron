@@ -22,6 +22,8 @@ from scheduler_tool import *
 from air_sun_tool import air_quality, sun_times
 from youtube_tool import youtube_transcript
 from telegram_tool import send_telegram, read_telegram
+from repo_tool import repo
+from text_ui import SOURCE
 
 def set_browser_mode(mode: str) -> str:
     if mode not in ("headless", "visible"):
@@ -58,6 +60,8 @@ GATED = {"browser_click", "browser_type", "browser_fill_form", "browser_press_ke
 # Call tools mcp or local as nesessary
 async def call_tool(name: str, args: dict) -> str:
     if name in GATED:
+        if SOURCE.get() == "tg":
+            return "The user declined: this needs confirmation at the PC."
         if ask(f"\n Confirm {name} {args}? [y/N] ").strip().lower() != "y":
             return "The user declined this action"
     if name == "research":
@@ -82,6 +86,13 @@ async def call_tool(name: str, args: dict) -> str:
         return await air_quality(**args)
     if name == "sun_times":
         return await sun_times(**args)
+    if name == "repo" and args.get("action") in ("clone", "setup", "run", "remove"):
+        if SOURCE.get() == "tg":
+            return "The user declined: this needs confirmation at the PC."
+        if ask(f"\n Confirm repo {args}? [y/N] ").strip().lower() != "y":
+            return "The user declined this action"
+    if name == "repo":
+        return await repo(**args)
     if name == "convert_currency":
         return await convert_currency(
             amount=args.get("amount", 1),

@@ -3,3 +3,4 @@
 - User's remote LLM runs on Kaggle via llama-server
 - User has not provided a specific recent GitHub repository name for memory storage.
 - User has not provided a specific recent GitHub repository name for memory storage.
+- The mango is considered the king of fruits in India

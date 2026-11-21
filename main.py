@@ -23,7 +23,8 @@ from voice_in import STT
 from recall_tool import log_turn, clear_history
 from github_tool import find_link
 from scheduler_tool import start_scheduler, stop_scheduler
-from telegram_tool import start_telegram, stop_telegram, AGENT_LOCK
+from telegram_tool import start_telegram, stop_telegram, AGENT_LOCK, TELEGRAM_ACTIVE
+import re
 
 STOP_WORDS = {"stop", "/stop", "quiet", "enough", "shut up"}
 VOICE_OFF = {"voice off", "stop listening", "type mode"}
@@ -37,6 +38,7 @@ def wait_port(port: int, timeout: float = 15) -> bool:
         except OSError:
             time.sleep(0.3)
     return False
+
 
 async def main():
     obs = None
@@ -64,7 +66,7 @@ async def main():
             voice = False
             agent_busy = False
             start_scheduler(
-                is_busy=lambda: agent_busy,
+                is_busy=lambda: agent_busy or TELEGRAM_ACTIVE,
                 get_system_prompt=lambda: messages[0]["content"],
                 run_agent_fn=run_agent,
             )
@@ -88,7 +90,8 @@ async def main():
                             print(c("info", " [voice off]"))
                             continue
                     else:
-                        user = read_you()
+                        # user = read_you()
+                        user = await asyncio.to_thread(read_you)
                     cmd = user.strip()
                     if cmd.lower().strip(" .!") in STOP_WORDS:
                         voice_out.stop()
@@ -172,7 +175,7 @@ async def main():
                         user = "[system: " + "; ".join(pending) + ". Use search_docs or read_doc for questions about them.]\n" + user
                         pending.clear()
                     gl = find_link(user)
-                    if gl:
+                    if gl and not re.search(r"\b(clone|install|set ?up|use|run)\b", user, re.I):
                         user = (f'[system: GitHub link in message. Call the github tool, action "{gl["action"]}", '
                                 f'repo exactly "{gl["url"]}". Never ingest_url, web_search or browse a github.com link.]\n' + user)
                     voice_out.stop()

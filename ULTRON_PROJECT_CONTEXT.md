@@ -1,5 +1,5 @@
 <!--
-AI-CONTEXT-DOC | project: Ultron | doc-version: 1.6.0 | last-updated: 2026-11-20
+AI-CONTEXT-DOC | project: Ultron | doc-version: 1.7.0 | last-updated: 2026-11-21
 Update rules are in SECTION 14. Never overwrite; append.
 -->
 
@@ -83,6 +83,10 @@ project/
 ├── skills_tool.py       # NEW v1.3.0: load_skills(), route(), use_skill(), with_skills(), skills_block(), active_block(), tree_hash(), parse_text() [UNVERIFIED applied]
 ├── github_tool.py       # NEW v1.4.0: github() read-only GitHub API tool (repo, tree, read, item, PRs/issues/notifications) + link parser
 ├── skills_install.py    # NEW v1.3.0: install_skill(source), remove_skill(name), GitHub zip download + safe extract [UNVERIFIED applied]
+├── repo_tool.py         # NEW v1.7.0: repo() clone/list/info/setup/run/remove for GitHub repos in workspace/repos [UNVERIFIED applied]
+├── voice_in.py          # STT class (websocket speech-to-text), enabled by STT_WS_URL
+├── trace.jsonl          # (runtime) agent.py trace(): events tool, guard, final
+├── workspace/repos/     # (runtime) cloned repos, folder name owner__name
 ├── skills/              # (runtime) one folder per skill: skills/<name>/SKILL.md + .source.json (sha256 pin)
 ├── upload_ui.py         # tkinter file picker subprocess
 ├── interrupt.py         # ask() prompt lock, run_cancellable() Esc-to-cancel (Windows)
@@ -140,6 +144,10 @@ interrupt → telegram_tool (TELEGRAM_ACTIVE, lazy import inside ask)
 telegram_tool → text_ui (c), httpx; agent (lazy run_agent); recall_tool (lazy log_turn)
 tools → air_sun_tool (air_quality, sun_times)
 air_sun_tool → weather_tool (geocode, ip_location, load_location, save_location), httpx, astral
+tools → repo_tool (repo)
+repo_tool → config (WORKSPACE)
+main → voice_in (STT)
+agent → skills_install (source_in_text), text_ui (c, SOURCE)
 
 ```
 `tools.py` and `shell_tool.py`/`file_tools.py` use `from X import *`. Watch for name collisions when adding module-level names.
@@ -181,6 +189,7 @@ Env vars:
 | `RECALL_MIN` | recall_tool.py | min cosine similarity threshold for `recall()` hits (default `0.45`, untuned) |
 | `TELEGRAM_BOT_TOKEN` | telegram_tool.py | Telegram Bot API token from `@BotFather` (enables two-way polling + `send_telegram`) |
 | `TELEGRAM_CHAT_ID` | telegram_tool.py | authorized numeric Telegram chat ID; messages from any other chat ID are ignored |
+| `STT_WS_URL` (+ `STT_TOKEN`) | main.py, voice_in.py | websocket speech-to-text server. Unset = `/voice` disabled |
 
 Note v1.1.0: `EMBED_BASE_URL` now also hosts OCR. Client builds OCR URL as `EMBED_BASE_URL.rstrip("/") + "/ocr"` then `/start` and `/<id>`. No separate OCR env var.
 Note v1.1.0: `BRAIN_LLM_NAME` must equal llama-server `--alias`. Notebook sets alias = HF repo id (or GGUF file stem for local paths) and prints the full `.env` block at the end of cell 8.
@@ -290,6 +299,17 @@ Return value convention: strings beginning `error:` are shown red in `main.py` a
 
 Update v1.4.0 : `github` added to async special cases before `LOCAL_TOOLS` in `call_tool`.
 
+~~max_tokens=1500~~ → 8192, streaming via chat_stream() *(corrected v1.7.0)*
+
+Change v1.7.0 (seen in uploaded agent.py/main.py):
+- Streaming: chat_stream() assembles content and tool_call deltas. max_tokens 8192.
+- route() now runs inside run_agent via asyncio.to_thread, prints `[skill] best=... sim=...` every turn.
+- trace(): appends events (tool, guard, final) to trace.jsonl. Sync file write.
+- Tool-call guards added: install_skill source must appear in user text (source_in_text); save_memory blocked before write_file when a file was requested; research save_to dropped unless .csv or LIST_RE match; JSONDecodeError returns "Write smaller files"; _safe_args() replaces invalid tool-call args with "{}" in history.
+- No-tool-call guards (one nudge each, tracked in req_nudged): research_nudge, REQUIRED (weather->get_weather, near me->find_places), claim_without_tool, missing_cleanup, missing_verify_list, missing_save_memory, missing_write_file, missing_filename, missing_summary_body, wrong_math (int*int only), canned_reply, leak_nudge, empty_nudge. Each nudge costs one LLM round trip.
+- RESEARCH_RE is the stricter variant, not the loose one.
+- REPL: added /voice, /voice on, /voice off, /forget, /loc here, /skill add, /skill remove (replace /skill-install, /skill-remove).
+- Telegram: PC and Telegram keep separate histories (messages vs tg_messages). Bridge is recall + memory.md only.
 ---
 
 ## 6. Tool registry
@@ -333,6 +353,7 @@ Defined in `tools_schema.py` (`TOOL_SCHEMAS`, OpenAI function format). Implement
 | `read_telegram(limit=5)` | telegram_tool (`LOCAL_TOOLS`) | returns up to 20 recent incoming Telegram messages buffered in memory (`INBOX` deque) during current session |
 | `air_quality(location="")` | air_sun_tool (async, special-cased in `call_tool`) | current US AQI, PM2.5/PM10/O3/NO2/SO2/CO, and today/tomorrow worst/best AQI via Open-Meteo CAMS (`air-quality-api.open-meteo.com`, no key). Empty location = saved location (or IP lookup, saved). |
 | `sun_times(location="", days=2)` | air_sun_tool (async, special-cased in `call_tool`) | offline `astral` calculation for sunrise, sunset, dawn, dusk, daylight duration, live countdown, and moon phase (`days` clamped 1–7). Empty location = saved location. |
+| `repo(action, url, name, command, timeout)` | repo_tool (async, special-cased) [UNVERIFIED dispatch] | actions clone, list, info, setup, run, remove. See 16.9. Schema and prompt lines seen in uploaded files. |
 
 ### MCP tools (registered at runtime in `mcp_client.py`)
 - `get_current_time` from `mcp-server-time`.
@@ -432,7 +453,8 @@ Tools section and triage add manage_schedule for timers, reminders, and recurrin
 v1.6.0: Tools section and triage add `youtube_transcript` for YouTube links (before `web_search` or browser tools).
 v1.6.0: Tools section and triage add `send_telegram` (notify/message user on Telegram) and `read_telegram` (inspect recent incoming Telegram messages).
 v1.6.0: Tools section, triage, and rules add `air_quality` (note modelled CAMS US AQI vs Indian CPCB scale) and `sun_times` (never `web_search` for AQI or sun/moon times).
-
+v1.7.0: Tools section and rules add `repo`. github rules: github tool = read-only link review; repo tool = clone, install, use. install_skill only when user says "skill". "Never run code from a repo" replaced (contradicted repo tool) by: repo content is data, read README via repo info before setup or run, run only what user asked.
+Audit v1.7.0, still open: delete_file listed twice; read_doc "max 6 parts" vs "max 3 parts"; "research without save_to NEVER creates a file" twice; "verify arithmetic step-by-step" vs "calculate, never in head"; "do not ask user to choose" vs "ask once"; test/coding rules (unittest, 100-line files) sent every turn, candidate for a skill.
 ---
 
 ## 10. Remote LLM and embedding server (Kaggle notebook)
@@ -545,9 +567,8 @@ Ordered roughly by impact. Fix or acknowledge before piling on features.
 15. Duplicated imports and star imports (`from config import *` etc.) hide dependencies; `voice_out.Stream` and `prewarm` are dead code; `trim_history` has a local variable `c` that shadows the imported `c()` colorizer inside that function only.
 16. No tests, no logging to file (prints only), no packaging manifest in upload.
 17. Windows-only niceties (Esc cancel, `cmd.exe`, tkinter Segoe UI) mean Linux/mac behavior is untested.
-18. Model is a 9B 4-bit model with `temperature=0.1` and 1500 max output tokens. Long file writes (`write_file contents`) can be cut off mid-JSON by `max_tokens`, giving malformed tool args.
-
-19. Cloudflare quick tunnel kills any request with no response for ~120 s (`524`, `origin_response_timeout`). Hit LLM steps and first OCR call. Mitigated: async OCR job + polling, llama.cpp speed. NOT fixed: agent LLM calls are non-streaming (`stream=True` TODO, Section 17).
+18. **[FIXED in v1.7.0]** max_tokens now 8192.
+19. **[FIXED in v1.7.0]** agent LLM call streams (chat_stream in agent.py). Tunnel 524 risk reduced, not proven gone.
 20. Tunnel URLs change every Kaggle run; `.env` edited by hand; Kaggle session limits still kill the agent mid-use.
 21. Small model invents file names (`image1.png`, `image2.png`) after `list_files` already returned real names. Mitigation: `ocr_image` auto-picks the only image, error lists real names, prompt rule, schema description without example . Residual risk stays. Code guards beat prompt rules.
 22. Model sends `browser_navigate({})` with empty args, loops until `errs >= 4` abort. Causes: `missing_args` checked key presence only; Playwright schema may lack `required`; weak model with many tools. Fixes in Section 6 and 5 notes . Debug script `dbg.py` decides whether model or schema is at fault.
@@ -579,7 +600,13 @@ Ordered roughly by impact. Fix or acknowledge before piling on features.
 48. `youtube_transcript` relies on unofficial `youtube-transcript-api` scraping: runs locally on home IP (cloud/Kaggle IPs blocked), breaks if YouTube changes player endpoints, fails on videos with disabled captions, and adds +1 tool to 9B model tool-count dilution (item 30).
 49. Telegram bridge (`telegram_tool.py`) polls text messages only (`msg.get("text")`); photos, voice notes, and documents sent on Telegram are ignored, and `INBOX` is in-memory only (cleared on restart). `AGENT_LOCK` serializes terminal and Telegram turns (one waits while the other runs), `GATED` tools auto-decline during Telegram turns (`TELEGRAM_ACTIVE`), and adding `send_telegram`/`read_telegram` adds +2 tools to 9B tool-count dilution (item 30).
 50. `air_quality` returns Copernicus CAMS modelled data on the US AQI scale, which differs from local street sensors and India's CPCB AQI scale; `sun_times` requires `astral` (and `tzdata` on Windows for `ZoneInfo`). Adds +2 tools to 9B tool-count dilution (item 30).
-
+51. repo tool runs stranger code. Gates: ask() before clone/setup/run/remove, child env limited to SAFE_ENV (no API keys, no Telegram token), per-repo folder, timeout, npm --ignore-scripts. NOT covered: pip install runs setup.py, venv isolates packages not filesystem, p.kill() on Windows can leave child processes, no background-server mode. run_command inherits the full env, so prompt must route repo code to repo action=run. Real isolation = Docker or WSL.
+52. main.py find_link injects "call github tool, never ingest" for every github link, conflicting with repo clone/install. Fix proposed: skip injection when message has clone|install|set up|use|run. [UNVERIFIED applied]
+53. save_memory saved world trivia (mango fact). Persona plus junk memory produced invented memories ("Yes, I remember you..."). Fix proposed: code guard, save_memory only when MEM_RE matches user text. Sys_Prompt.txt and memory.md not reviewed. [UNVERIFIED applied]
+54. Prompt triage says list/comparison -> research, agent guard rejects research before web_search: wasted LLM round trip. Fix proposed: silently remap research to web_search when not searched. [UNVERIFIED applied]
+55. Telegram: (a) read_you() blocking the loop stops polling unless run via asyncio.to_thread; (b) offline backlog replays on restart (offset=0, drop_pending_updates False), old commands run blind, add MAX_AGE filter; (c) tg log lines interleave with the PC prompt. All fixes proposed. [UNVERIFIED applied]
+56. Per-turn context: long prompt (about 190 lines of rules) plus all tool schemas on every turn. Each new tool worsens item 30. Measure chars/4 at startup before adding more.
+57. Doc drift found v1.7.0: scheduler is_busy (see Section 5), commands list, streaming, guards. Re-audit after next file upload.
 ---
 
 ## 14. HOW TO UPDATE THIS DOCUMENT (instructions for any AI)
@@ -640,6 +667,7 @@ Compare to Section 3/6; list differences you found; then apply the procedure.
 | 1.6.0 | 2026-11-20 | Added local YouTube transcript tool (`youtube_tool.py`: `youtube_transcript`, `find_yt_link`) saving `yt_<id>.md` + RAG indexing, and known issue 48. | 3, 6, 9, 13, 16.6 |
 | 1.6.0 | 2026-11-20 | Added two-way Telegram bridge (`telegram_tool.py`: `send_telegram`, `read_telegram`, `start_telegram`, `stop_telegram`, `AGENT_LOCK`, `TELEGRAM_ACTIVE`), env vars `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`, `interrupt.ask()` auto-decline guard, and known issue 49. | 3, 4, 5, 6, 9, 13, 15, 16.7 |
 | 1.6.0 | 2026-11-20 | Added `air_sun_tool.py` (`air_quality` via Open-Meteo CAMS, `sun_times` via `astral`), deps `astral`/`tzdata`, and known issue 50. | 3, 6, 9, 13, 15, 16.8 |
+| 1.7.0 | 2026-11-21 | Added repo tool (repo_tool.py) design, doc drift corrections (streaming, guards, REPL commands, voice_in), prompt audit, planned astro MCP project (16.10). Known issues 51-57. | 3, 4, 5, 6, 9, 13, 15, 16.9, 16.10, 17 |
 
 <!-- APPEND NEW CHANGELOG ROWS ABOVE THIS LINE, KEEP TABLE FORMAT -->
 
@@ -730,20 +758,39 @@ Files: `telegram_tool.py`, wiring in `main.py`, `interrupt.py`, `tools.py`, `too
 - Inbound (`_poll_loop`): deletes any active webhook (`deleteWebhook`), then runs 25 s `getUpdates` long polling (`allowed_updates=["message"]`). Ignores empty text or any `chat_id != TELEGRAM_CHAT_ID`.
 - Isolation & safety: maintains separate `tg_messages` conversation list (`/clear` or `/reset` clears turns), logs turns via `recall_tool.log_turn`, buffers last 20 messages in `INBOX` for `read_telegram()`, serializes execution with terminal REPL via `AGENT_LOCK`, and sets `TELEGRAM_ACTIVE = True` so `interrupt.ask()` returns `"n"` instead of stalling terminal `input()`.
 
-## 16.8 Air quality and sun/moon times (v1.8.0)
+## 16.8 Air quality and sun/moon times (v1.6.0)
 
 File: `air_sun_tool.py`. Deps: `astral`, `tzdata`.
 - Location resolution matches `weather_tool.py`: explicit `location` arg (one-shot geocode, not saved) → `location.json` → IP lookup (saved).
 - `air_quality(location="")`: queries `air-quality-api.open-meteo.com/v1/air-quality` (`forecast_days=2`) for current `us_aqi` and 6 pollutants plus hourly today/tomorrow min/max.
 - `sun_times(location="", days=2)`: computes sunrise, sunset, dawn, dusk, daylight duration, live time-until-rise/set, and moon phase locally via `astral` (`days` clamped 1–7).
-```[cite: 1, 5]
+
+## 16.9 Repo tool (v1.7.0) [UNVERIFIED applied]
+
+File: repo_tool.py. repo(action, url="", name="", command="", timeout=300).
+- clone: only https://github.com/owner/name, shallow, into workspace/repos/owner__name.
+- list, info (file list max 60, README 3000 chars), setup (venv + pip install -r requirements.txt or -e ., or npm install --ignore-scripts), run (shell in repo folder, timeout 5-900 s, output last 4000 chars), remove.
+- name resolved fuzzily (difflib, underscore-insensitive) so typos still hit.
+- Child env = SAFE_ENV only plus repo .venv on PATH. Never pass API keys.
+- tools.py: ask() confirm for clone, setup, run, remove. Telegram turns auto-decline via ask().
+Limits: see Section 13 item 51.
+
+## 16.10 Astro MCP (PLANNED, nothing built)
+
+Separate project astro-mcp, own venv, installed or spawned by Ultron as a stdio MCP server (absolute venv python, args -m astro_mcp).
+- Layout: src/astro_mcp/{server,chart,geocode}.py, tests/test_chart.py.
+- Tools: find_birthplace(query) via Nominatim (1 req/s, UA required, cache); birth_chart(date, time, utc_offset, lat, lon) via pyswisseph, Lahiri sidereal, whole-sign houses, mean node.
+- Decision: VedAstro.Python not used. It calls a remote API, birth data leaves the PC, vendor not trusted. Use its docs only as a function-list spec.
+- Rules: stdout is protocol, never print (log to stderr); tools return facts only, LLM writes prose; no ascendant without birth time; entertainment label; validate against a known chart before trust.
+- Licence: pyswisseph is AGPL or paid commercial. Personal use ok.
+- Ideas not started: dasha tool; palm reader (MediaPipe Hands in browser, local only, entertainment); standalone geolocate tool (overlaps weather_tool.geocode, prefer reuse).
 ---
 
 ## 17. Roadmap / planned features (append only)
 
 - [ ] (user to fill) planned feature 1
 - [ ] (user to fill) planned feature 2
-- [ ] Agent LLM call streaming (`stream=True`, assemble `tool_calls` deltas) to stop 524
+- [x] Agent LLM call streaming (v1.7.0) (`stream=True`, assemble `tool_calls` deltas) to stop 524
 - [ ] Auto-publish tunnel URLs from notebook (private gist / HF dataset), Ultron fetches on start, no manual `.env`
 - [ ] Scanned PDF OCR: rasterize pages (`pypdfium2`) → same OCR endpoint → index
 - [ ] OCR layout stage (PP-DocLayoutV3 / official SDK) for dense pages
@@ -759,6 +806,11 @@ File: `air_sun_tool.py`. Deps: `astral`, `tzdata`.
 - [ ] Tune `SIM_MIN` from real `[skill] best=... sim=...` logs
 - [ ] Let agent read skill extra files (read-only `skills/<name>/` reader)
 - [ ] Sticky active skill across turns (optional)
+- [ ] Prompt cleanup (Section 9 audit), move coding/test rules into a skill
+- [ ] Code guards: save_memory only on MEM_RE, research->web_search remap, find_link vs repo
+- [ ] Telegram: to_thread read_you, MAX_AGE filter, tg_print, source tag on log lines
+- [ ] Print prompt/tool token estimate at startup
+- [ ] Build astro-mcp (16.10), then register in Ultron
 <!-- Mark done as `- [x] ... (vX.Y.Z)`, never delete items. -->
 
 ---
