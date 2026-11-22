@@ -24,6 +24,7 @@ from youtube_tool import youtube_transcript
 from telegram_tool import send_telegram, read_telegram
 from repo_tool import repo
 from text_ui import SOURCE
+from export_tool import export_doc
 
 def set_browser_mode(mode: str) -> str:
     if mode not in ("headless", "visible"):
@@ -52,10 +53,10 @@ LOCAL_TOOLS = {
     "remove_doc": remove_doc,
     "calculate": calculate,
     "system_status": system_status,
-    "read_telegram": read_telegram
+    "read_telegram": read_telegram,
 }
 
-GATED = {"browser_click", "browser_type", "browser_fill_form", "browser_press_key", "remove_doc", "delete_file"}
+GATED = {"browser_click", "browser_type", "browser_fill_form", "browser_press_key", "remove_doc", "delete_file", "export_doc"}
 
 # Call tools mcp or local as nesessary
 async def call_tool(name: str, args: dict) -> str:
@@ -78,6 +79,8 @@ async def call_tool(name: str, args: dict) -> str:
         return await youtube_transcript(**args)
     if name == "use_skill":
         return await use_skill(**args)
+    if name == "export_doc":
+        return await export_doc(**args)
     if name == "send_telegram":
         return await send_telegram(**args)
     if name == "find_places":

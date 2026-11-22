@@ -618,4 +618,24 @@ TOOL_SCHEMAS = [
             }
         }
     },
+    {
+        "type": "function", 
+        "function": {
+        "name": "export_doc",
+        "description": "Convert a workspace file to another format. Saves next to the original.",
+        "parameters": {
+            "type": "object", 
+            "properties": {
+                "filename": {
+                    "type": "string", 
+                    "description": "Workspace file, e.g. report.md"},
+                "format": {
+                    "type": "string", 
+                    "enum": ["docx", "html", "epub", "odt", "txt"],
+                    "description": "Target format"}
+                },
+                "required": ["filename", "format"]
+            }
+        }
+    },
 ]

@@ -19,13 +19,14 @@ browser_state = {"mode": "headless"}
 
 MCP_SERVERS = {
     "time": StdioServerParameters(command="uvx", args = ["mcp-server-time"]),
-    "scrapling": StdioServerParameters(command="scrapling", args=["mcp"])
+    "scrapling": StdioServerParameters(command="scrapling", args=["mcp"]),
+    "pandoc": StdioServerParameters(command="uvx", args=["mcp-pandoc"]),
 }
 
 mcp_session: dict[str, ClientSession] = {}
 
-ALLOWED = {"get_current_time", "make_request"}
-HIDDEN_TOOLS = {"make_request"}
+ALLOWED = {"get_current_time", "make_request", "convert-contents"}
+HIDDEN_TOOLS = {"make_request", "convert-contents"}
 BROWSER_ALLOWED = {"browser_navigate", "browser_snapshot", "browser_click",
                    "browser_type", "browser_fill_form", "browser_press_key",
                    "browser_wait_for"}

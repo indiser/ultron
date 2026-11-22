@@ -1,5 +1,5 @@
 <!--
-AI-CONTEXT-DOC | project: Ultron | doc-version: 1.7.0 | last-updated: 2026-11-21
+AI-CONTEXT-DOC | project: Ultron | doc-version: 1.7.1 | last-updated: 2026-11-22
 Update rules are in SECTION 14. Never overwrite; append.
 -->
 
@@ -353,12 +353,14 @@ Defined in `tools_schema.py` (`TOOL_SCHEMAS`, OpenAI function format). Implement
 | `read_telegram(limit=5)` | telegram_tool (`LOCAL_TOOLS`) | returns up to 20 recent incoming Telegram messages buffered in memory (`INBOX` deque) during current session |
 | `air_quality(location="")` | air_sun_tool (async, special-cased in `call_tool`) | current US AQI, PM2.5/PM10/O3/NO2/SO2/CO, and today/tomorrow worst/best AQI via Open-Meteo CAMS (`air-quality-api.open-meteo.com`, no key). Empty location = saved location (or IP lookup, saved). |
 | `sun_times(location="", days=2)` | air_sun_tool (async, special-cased in `call_tool`) | offline `astral` calculation for sunrise, sunset, dawn, dusk, daylight duration, live countdown, and moon phase (`days` clamped 1–7). Empty location = saved location. |
-| `repo(action, url, name, command, timeout)` | repo_tool (async, special-cased) [UNVERIFIED dispatch] | actions clone, list, info, setup, run, remove. See 16.9. Schema and prompt lines seen in uploaded files. |
+| `repo(action, url, name, command, timeout)` | repo_tool (async, special-cased) | actions clone, list, info, setup, run, remove. See 16.9. Schema and prompt lines seen in uploaded files. |
+| `export_doc(filename, format)` | export_tool (async, special-cased in `call_tool`, GATED) | converts workspace file (md html txt docx rst tex epub ipynb odt) to docx html epub odt txt via hidden pandoc MCP tool `convert-contents`. Output saved next to source, path derived from source, never LLM-chosen. Refuses overwrite. PDF not supported (needs TeX). Returns `DONE. saved X, N bytes in workspace.` |
 
 ### MCP tools (registered at runtime in `mcp_client.py`)
 - `get_current_time` from `mcp-server-time`.
 - `make_request` from Scrapling: allowed but HIDDEN (not given to LLM). Used internally by `research_tool.fetch_page`.
 - Browser (Playwright MCP) allowed set: `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_fill_form`, `browser_press_key`, `browser_wait_for`. Schemas are registered once, from whichever browser session connects first; calls route to `browser_sessions[browser_state["mode"]]`. Output capped at 8000 chars.
+- `convert-contents` from `mcp-pandoc` (`uvx mcp-pandoc`): allowed and HIDDEN. Used only by `export_tool.export_doc`. Needs `pandoc` binary on PATH.
 
 ### Confirmation gating (`tools.py: GATED`)
 `browser_click`, `browser_type`, `browser_fill_form`, `browser_press_key`, `remove_doc` → `ask("Confirm ...? [y/N]")`. `run_command` has its own prompt. `interrupt.ask()` sets a threading event so the Esc watcher doesn't steal keystrokes during the prompt.
@@ -607,6 +609,8 @@ Ordered roughly by impact. Fix or acknowledge before piling on features.
 55. Telegram: (a) read_you() blocking the loop stops polling unless run via asyncio.to_thread; (b) offline backlog replays on restart (offset=0, drop_pending_updates False), old commands run blind, add MAX_AGE filter; (c) tg log lines interleave with the PC prompt. All fixes proposed. [UNVERIFIED applied]
 56. Per-turn context: long prompt (about 190 lines of rules) plus all tool schemas on every turn. Each new tool worsens item 30. Measure chars/4 at startup before adding more.
 57. Doc drift found v1.7.0: scheduler is_busy (see Section 5), commands list, streaming, guards. Re-audit after next file upload.
+58. `export_doc` +1 tool, worsens item 30. Needs `pandoc` on PATH (winget install JohnMacFarlane.Pandoc). Extra stdio server adds startup time (item 10). Raw `convert-contents` has no path sandbox, so it stays hidden. Bug found at integration: async tool placed in LOCAL_TOOLS returned an un-awaited coroutine and the 9B reported success. Async tools must be special-cased in `call_tool` above the LOCAL_TOOLS check.
+
 ---
 
 ## 14. HOW TO UPDATE THIS DOCUMENT (instructions for any AI)
@@ -668,6 +672,7 @@ Compare to Section 3/6; list differences you found; then apply the procedure.
 | 1.6.0 | 2026-11-20 | Added two-way Telegram bridge (`telegram_tool.py`: `send_telegram`, `read_telegram`, `start_telegram`, `stop_telegram`, `AGENT_LOCK`, `TELEGRAM_ACTIVE`), env vars `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`, `interrupt.ask()` auto-decline guard, and known issue 49. | 3, 4, 5, 6, 9, 13, 15, 16.7 |
 | 1.6.0 | 2026-11-20 | Added `air_sun_tool.py` (`air_quality` via Open-Meteo CAMS, `sun_times` via `astral`), deps `astral`/`tzdata`, and known issue 50. | 3, 6, 9, 13, 15, 16.8 |
 | 1.7.0 | 2026-11-21 | Added repo tool (repo_tool.py) design, doc drift corrections (streaming, guards, REPL commands, voice_in), prompt audit, planned astro MCP project (16.10). Known issues 51-57. | 3, 4, 5, 6, 9, 13, 15, 16.9, 16.10, 17 |
+| 1.7.1 | 2026-11-22 | Added pandoc MCP (hidden `convert-contents`) wrapped by `export_tool.py` `export_doc`, workspace-locked, GATED. Fixed LOCAL_TOOLS async slip. Known issue 58. | 3, 4, 5, 6, 9, 13 |
 
 <!-- APPEND NEW CHANGELOG ROWS ABOVE THIS LINE, KEEP TABLE FORMAT -->
 

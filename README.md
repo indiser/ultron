@@ -48,7 +48,9 @@ main.py
         │     ├── air_sun_tool.py   ← air quality (Open-Meteo/CAMS) + sun/moon times (astral)
         │     ├── youtube_tool.py   ← YouTube transcript fetch, save to workspace, index into RAG
         │     ├── telegram_tool.py  ← Telegram bot: send messages + background polling loop
-        │     └── mcp_client.py     ← MCP servers (time, Scrapling) + Playwright browser
+        │     ├── repo_tool.py      ← local GitHub repo manager (clone, setup, run — workspace/repos/)
+        │     ├── export_tool.py    ← document format conversion via pandoc MCP (md/html → docx/epub/odt)
+        │     └── mcp_client.py     ← MCP servers (time, Scrapling, pandoc) + Playwright browser
         ├── voice_out.py            ← offline TTS pipeline (PocketTTS + sentence streaming + Stream class)
         ├── smoke.py                ← automated 20-scenario test suite (easy/med/hard/extreme)
         └── trace.jsonl             ← runtime event log (tool calls, guards, final replies)
@@ -120,7 +122,13 @@ Two tools in one module, both free and no API key required. `air_quality` fetche
 Fetches the transcript of any YouTube video (watch URLs, shorts, live, youtu.be links, or bare 11-char video IDs) via `youtube-transcript-api`. The transcript is saved to `yt_<id>.md` in the workspace and immediately indexed into the RAG store so it can be searched or summarised with `search_docs` / `read_doc`. Results are cached on disk — if the file already exists it is not re-fetched. Returns a 1800-char preview plus the index confirmation. Supports non-English transcripts with an `en` fallback.
 
 **Telegram Integration** (`telegram_tool.py`)
-Bidirectional Telegram bot that runs as a background asyncio task alongside the terminal loop. At startup `start_telegram()` launches a long-poll loop against the Bot API — incoming messages from the configured chat ID are routed through the full agent loop and the reply is sent back via `send_telegram`. The terminal and Telegram share the same `AGENT_LOCK` so only one turn runs at a time. Incoming messages are also appended to the recall log. `read_telegram` lets the agent inspect recent incoming messages from within a turn. Requires `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`; silently disabled if either is missing.
+Bidirectional Telegram bot that runs as a background asyncio task alongside the terminal loop. At startup `start_telegram()` launches a long-poll loop against the Bot API — incoming messages from the configured chat ID are routed through the full agent loop and the reply is sent back via `send_telegram`. The terminal and Telegram share the same `AGENT_LOCK` so only one turn runs at a time. Incoming messages are also appended to the recall log. `read_telegram` lets the agent inspect recent incoming messages from within a turn. Requires `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`; silently disabled if either is missing. A `SOURCE` context variable (`text_ui.py`) is set to `"tg"` for Telegram turns so the agent loop tags log lines with `[tg]` and gated tools (destructive file ops, browser mutations, repo actions) auto-decline instead of prompting the terminal.
+
+**Local Repo Manager** (`repo_tool.py`)
+Clones, inspects, sets up, and runs GitHub repositories locally inside `workspace/repos/`. Actions: `clone` (shallow `--depth 1`), `list`, `info` (reads README + file tree), `setup` (creates a `.venv` and installs deps from `requirements.txt`, `pyproject.toml`, or `package.json`), `run` (executes a shell command inside the repo with the venv activated), `remove`. Environment is sanitised — only safe OS vars are passed, no API keys or tokens leak into subprocesses. Clone, setup, run, and remove require user approval at the PC; they are auto-declined from Telegram. The agent is instructed to always call `info` before `setup` or `run`.
+
+**Document Export** (`export_tool.py`)
+Converts workspace files to other formats via a pandoc MCP server (`convert-contents` tool). Accepts markdown, HTML, plain text, DOCX, RST, LaTeX, EPUB, Jupyter notebooks, and ODT as input; outputs DOCX, HTML, EPUB, ODT, or TXT. Requires `pandoc` and `uvx` to be installed and the pandoc MCP session to be connected at startup. Requires user approval (gated); auto-declined from Telegram.
 
 **Conversation Recall** (`recall_tool.py`)
 Persists every finished user/assistant turn to `recall/chat_log.jsonl` and lazily builds a matching embedding index in `recall/vecs.npy`. The `recall` tool searches past sessions by semantic similarity — it embeds the query, scores all stored turns, and returns the top matches with timestamps and paired context. Embedding is incremental: only new turns are encoded on each call, with a 60-second deadline to avoid blocking on large backlogs. A minimum similarity threshold (`RECALL_MIN`, default 0.45, tunable via `.env`) filters noise. `clear_history()` wipes both files. The `/forget` slash command calls it directly from the terminal.
@@ -141,7 +149,7 @@ A sandboxed AST-based math evaluator — no `eval`, no subprocess. Parses the ex
 Reports a live snapshot of the local machine: CPU usage, core count, clock frequency, load average, RAM and swap (used/total/percent), per-disk usage, battery state and time remaining, GPU utilisation and VRAM via `nvidia-smi`, CPU temperature, system uptime, and Ultron's own process RSS. Uses `psutil` when available and falls back to OS-native APIs (Windows `GlobalMemoryStatusEx`/`GetTickCount64`, Linux `/proc/meminfo` and `/proc/uptime`, macOS `sysctl`/`vm_stat`) so it works without any optional dependency.
 
 **Persona** (`Sys_Prompt.txt`)
-The active system prompt defining identity, voice, humor rules, safety floor, and security robustness. Composed with agent tool rules and the installed skills list at runtime via `build_prompt()` in `SYSTEM_PROMPT.py`. The persona is a costume. Competence is not optional. The agent rules now include explicit triage paths for `calculate`, `system_status`, `convert_currency`, `manage_schedule`, and `recall`, plus a hard rule that any pasted `github.com` link must go through the `github` tool — never `browser` or `ingest_url` — and that all GitHub-sourced content is treated as untrusted data.
+The active system prompt defining identity, voice, humor rules, safety floor, and security robustness. Composed with agent tool rules and the installed skills list at runtime via `build_prompt()` in `SYSTEM_PROMPT.py`. The persona is a costume. Competence is not optional. The agent rules now include explicit triage paths for `calculate`, `system_status`, `convert_currency`, `manage_schedule`, `recall`, `air_quality`, `sun_times`, `youtube_transcript`, `send_telegram`, `read_telegram`, `repo`, and `export_doc`. GitHub link routing is split: pasting a link to read/review/summarise goes to the `github` tool; asking to clone, install, set up, or run a repo goes to the `repo` tool. All GitHub-sourced content is treated as untrusted data.
 
 **Tracing** (`trace.jsonl`)
 Every agent run appends structured JSON lines to `trace.jsonl` — one line per tool call (name, args, result preview), one per guard trigger (kind), and one final line with the reply text. Useful for debugging guard-rail behaviour and tool routing without adding print statements.
@@ -161,7 +169,8 @@ Ultron has a built-in STT pipeline via `voice_in.py`. It connects over WebSocket
 - [`uv`](https://github.com/astral-sh/uv) package manager
 - A running LLM backend with an OpenAI-compatible API (e.g. vLLM, Ollama, LM Studio)
 - [Obscura](https://github.com/nicholasgasior/obscura) in PATH (for headless browser support)
-- Node.js + npx (for Playwright MCP)
+- Node.js + npx (for Playwright MCP and pandoc MCP)
+- `pandoc` in PATH (for `export_doc`; `uvx` also required to run the pandoc MCP server)
 - *(Optional)* A remote embedding endpoint (also required for OCR)
 
 ### Install
@@ -268,6 +277,8 @@ These are handled directly in the input loop, outside the agent:
 | `youtube_transcript` | Fetch YouTube transcript, save to workspace as `.md`, and index into RAG |
 | `send_telegram` | Send a message to the user's configured Telegram chat |
 | `read_telegram` | Read recent incoming messages from the Telegram polling inbox |
+| `repo` | Clone, inspect, set up, and run GitHub repos locally in `workspace/repos/` (user approval required) |
+| `export_doc` | Convert a workspace file to docx, html, epub, odt, or txt via pandoc MCP (user approval required) |
 | `use_skill` | Activate an installed skill by name |
 | `install_skill` | Install a skill from a GitHub repo (user approval required) |
 | `set_browser_mode` | Switch browser between headless and visible |
@@ -306,7 +317,9 @@ This is version 0.1.0. It is a proof of concept, not a production system.
 - Currency conversion uses the Frankfurter API (ECB rates). Not all currency pairs are supported — pairs outside the ECB basket fall back to `web_search`.
 - Air quality data is modelled by CAMS via Open-Meteo, not a street-level sensor. Numbers differ from Indian apps that use the CPCB scale.
 - `youtube_transcript` requires `youtube-transcript-api` (`uv add youtube-transcript-api`). Transcripts are not available for all videos (disabled captions, private videos, or IP blocks).
-- Telegram polling requires `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`. Only messages from the configured chat ID are processed. The terminal and Telegram share one agent lock — they do not run concurrently.
+- Telegram polling requires `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`. Only messages from the configured chat ID are processed. The terminal and Telegram share one agent lock — they do not run concurrently. Gated tools (destructive file ops, browser mutations, repo clone/setup/run/remove, export) are auto-declined from Telegram without prompting.
+- `repo` clones into `workspace/repos/`. Repos are not sandboxed — `run` executes arbitrary shell commands inside the repo folder with user approval. The environment passed to subprocesses is sanitised (no API keys or tokens).
+- `export_doc` requires `pandoc` in PATH and the pandoc MCP server running (`uvx pandoc-mcp`). It will fail silently if the MCP session is not connected at startup.
 
 ---
 
@@ -337,6 +350,7 @@ Sun/Moon: `astral`, `tzdata` (Windows)
 YouTube: `youtube-transcript-api`
 Skills: `pyyaml`
 Browser: `@playwright/mcp` (via npx), `obscura`
+Export: `pandoc` (system), pandoc MCP server (`uvx pandoc-mcp`)
 Audio: `sounddevice`, `soundfile`, `pocket-tts`, `torch`, `websockets`
 Runtime: `uv` (Python 3.14+)
 
