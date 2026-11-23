@@ -50,7 +50,7 @@ main.py
         │     ├── telegram_tool.py  ← Telegram bot: send messages + background polling loop
         │     ├── repo_tool.py      ← local GitHub repo manager (clone, setup, run — workspace/repos/)
         │     ├── export_tool.py    ← document format conversion via pandoc MCP (md/html → docx/epub/odt)
-        │     └── mcp_client.py     ← MCP servers (time, Scrapling, pandoc) + Playwright browser
+        │     └── mcp_client.py     ← MCP servers (time, Scrapling, pandoc, Context7, arXiv) + Playwright browser
         ├── voice_out.py            ← offline TTS pipeline (PocketTTS + sentence streaming + Stream class)
         ├── smoke.py                ← automated 20-scenario test suite (easy/med/hard/extreme)
         └── trace.jsonl             ← runtime event log (tool calls, guards, final replies)
@@ -101,11 +101,14 @@ A `Stream` class enables token-delta feeding: call `stream.feed(delta)` as LLM c
 A WebSocket STT client that streams raw 16 kHz PCM from the microphone to a `faster-whisper` server running on the Kaggle backend. The server (`stt_server.py`, written by the notebook) runs `faster-whisper large-v3-turbo` on GPU with built-in VAD — it detects speech onset, streams partial transcripts every ~0.7 s, and emits a final transcript when silence exceeds 600 ms. The client mutes itself while TTS is playing so Ultron does not transcribe its own voice. Voice mode is toggled with `/voice` in the terminal; saying "voice off" switches back to typing. If `STT_WS_URL` is not set, the STT client is not initialised and the terminal falls back to keyboard input silently. Set `STT_MIC` in `.env` to a device index or name to override the default microphone. `listen()` also accepts an `on_level` callback (RMS volume 0–1) and an `on_speech` callback (VAD state), plus an optional `stop` asyncio event for push-to-talk.
 
 **MCP Integration** (`mcp_client.py`)
-Connects to two MCP servers at startup via stdio:
+Connects to four MCP servers at startup via stdio:
 - `mcp-server-time` — current time
 - `scrapling mcp` — JavaScript-capable web scraping (used internally by the research engine)
+- `mcp-pandoc` — document format conversion (used internally by `export_doc`; `convert-contents` is hidden from the LLM)
+- `@upstash/context7-mcp` — up-to-date library documentation lookup (`resolve-library-id`, `get-library-docs`, `query-docs`)
+- `arxiv-mcp-server` — arXiv paper search and download (`search_papers`, `download_paper`, `list_papers`); papers saved to the workspace
 
-Tools are dynamically registered into the LLM's tool schema at runtime.
+Tools are dynamically registered into the LLM's tool schema at runtime. `make_request` (scrapling) and `convert-contents` (pandoc) are hidden from the LLM and used only internally.
 
 **Terminal UI** (`text_ui.py` + `interrupt.py`)
 Two small quality-of-life modules. `text_ui.py` applies ANSI 256-colour theming to every output category — your input, the assistant's reply, tool calls, results, errors, and status lines — with a `NO_COLOR` env escape hatch. `interrupt.py` runs a background thread on Windows that watches for an Esc keypress and cancels the in-flight agent coroutine via `asyncio.CancelledError`, cleanly rolling back the message history and pending RAG state so the conversation is left intact. Stop words (`stop`, `quiet`, `shut up`, etc.) typed as input also halt speech immediately without invoking the agent.
@@ -291,6 +294,12 @@ These are handled directly in the input loop, outside the agent:
 | `browser_wait_for` | Wait for a page condition |
 | `save_memory` | Persist a fact about the user to `memory.md` |
 | `get_current_time` | Current time via MCP |
+| `resolve-library-id` | Resolve a library name to a Context7-compatible ID for docs lookup |
+| `get-library-docs` | Fetch up-to-date documentation for a library by Context7 ID |
+| `query-docs` | Search within a library's documentation via Context7 |
+| `search_papers` | Search arXiv for papers by query, returning metadata and abstracts |
+| `download_paper` | Download a specific arXiv paper (PDF) to the workspace |
+| `list_papers` | List arXiv papers already downloaded to the workspace |
 
 ---
 
