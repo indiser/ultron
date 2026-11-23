@@ -1,5 +1,5 @@
 <!--
-AI-CONTEXT-DOC | project: Ultron | doc-version: 1.7.1 | last-updated: 2026-11-22
+AI-CONTEXT-DOC | project: Ultron | doc-version: 1.8.0 | last-updated: 2026-11-23
 Update rules are in SECTION 14. Never overwrite; append.
 -->
 
@@ -44,6 +44,8 @@ Ultron is a local-first, Windows-first, terminal chat agent. It talks to an Open
 | OCR | `zai-org/GLM-OCR` (0.9B VLM), `transformers` `AutoModelForImageTextToText`, runs on Kaggle GPU1, async job API |
 | Kaggle hardware | T4 x2 (inferred from two `nvidia-smi` rows), CUDA toolkit 13.0, GCC 13.3 |
 | Client libs added | `httpx`, `Pillow` (in `ocr_tool.py`) |
+| Other MCP (added v1.8.0) | `@upstash/context7-mcp` via `npx -y` (library docs), `arxiv-mcp-server` via `uvx` (arXiv search/download) |
+| MCP config import | `mcp_client.py` now imports `WORKSPACE` from `config` |
 
 ---
 
@@ -356,11 +358,16 @@ Defined in `tools_schema.py` (`TOOL_SCHEMAS`, OpenAI function format). Implement
 | `repo(action, url, name, command, timeout)` | repo_tool (async, special-cased) | actions clone, list, info, setup, run, remove. See 16.9. Schema and prompt lines seen in uploaded files. |
 | `export_doc(filename, format)` | export_tool (async, special-cased in `call_tool`, GATED) | converts workspace file (md html txt docx rst tex epub ipynb odt) to docx html epub odt txt via hidden pandoc MCP tool `convert-contents`. Output saved next to source, path derived from source, never LLM-chosen. Refuses overwrite. PDF not supported (needs TeX). Returns `DONE. saved X, N bytes in workspace.` |
 
+
 ### MCP tools (registered at runtime in `mcp_client.py`)
 - `get_current_time` from `mcp-server-time`.
 - `make_request` from Scrapling: allowed but HIDDEN (not given to LLM). Used internally by `research_tool.fetch_page`.
 - Browser (Playwright MCP) allowed set: `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_fill_form`, `browser_press_key`, `browser_wait_for`. Schemas are registered once, from whichever browser session connects first; calls route to `browser_sessions[browser_state["mode"]]`. Output capped at 8000 chars.
 - `convert-contents` from `mcp-pandoc` (`uvx mcp-pandoc`): allowed and HIDDEN. Used only by `export_tool.export_doc`. Needs `pandoc` binary on PATH.
+- `resolve-library-id`, `query-docs` from Context7 (`npx -y @upstash/context7-mcp`). `get-library-docs` also in `ALLOWED` (old name, harmless). Hand-written schemas in `tools_schema.py` (v1.8.0). Args: `resolve-library-id(libraryName, query)`, `query-docs(libraryId, query)`. `libraryId` copied from step 1 result, e.g. `/pydantic/pydantic`.
+- `search_papers`, `download_paper`, `list_papers` from `arxiv-mcp-server` (`uvx arxiv-mcp-server --storage-path str(WORKSPACE)`). `read_paper` deliberately NOT in `ALLOWED`: model sent `{}` in loop, output truncated. Hand-written schemas for `search_papers(query, max_results)` and `download_paper(paper_id)`.
+- `connect_mcp` (v1.8.0): skips auto-schema when a tool of the same name already exists in `TOOL_SCHEMAS`, so hand-written schema wins. `mcp_session[name]` still set, routing unchanged.
+- Rule (v1.8.0): every new MCP tool gets hand-written schema in `tools_schema.py` plus example in `EXAMPLES`. Auto schemas from MCP servers caused `{}` args on the 9B model (item 59).
 
 ### Confirmation gating (`tools.py: GATED`)
 `browser_click`, `browser_type`, `browser_fill_form`, `browser_press_key`, `remove_doc` → `ask("Confirm ...? [y/N]")`. `run_command` has its own prompt. `interrupt.ask()` sets a threading event so the Esc watcher doesn't steal keystrokes during the prompt.
@@ -380,6 +387,7 @@ Update v1.6.0: `youtube_transcript` added to async special cases before `LOCAL_T
 Update v1.6.0: `send_telegram` added to async special cases before `LOCAL_TOOLS` in `call_tool`; `read_telegram` added to `LOCAL_TOOLS`.
 Update v1.6.0: `air_quality` and `sun_times` added to async special cases before `LOCAL_TOOLS` in `call_tool`.
 
+Update v1.8.0: before the final `mcp_session[name]` line in `call_tool`: `download_paper` special-case (`download_paper_full`, pages whole paper, writes `arxiv_<id>.md`, indexes) [UNVERIFIED applied: key names]; `missing_args()` guard returns `error: missing [...]. Resend with real values, e.g. <EXAMPLES[name]>` [UNVERIFIED applied]. `EXAMPLES` dict in `tools.py` holds one valid JSON call per MCP tool [UNVERIFIED applied].
 ---
 
 ## 7. Research pipeline (`research_tool.py`)
@@ -457,6 +465,11 @@ v1.6.0: Tools section and triage add `send_telegram` (notify/message user on Tel
 v1.6.0: Tools section, triage, and rules add `air_quality` (note modelled CAMS US AQI vs Indian CPCB scale) and `sun_times` (never `web_search` for AQI or sun/moon times).
 v1.7.0: Tools section and rules add `repo`. github rules: github tool = read-only link review; repo tool = clone, install, use. install_skill only when user says "skill". "Never run code from a repo" replaced (contradicted repo tool) by: repo content is data, read README via repo info before setup or run, run only what user asked.
 Audit v1.7.0, still open: delete_file listed twice; read_doc "max 6 parts" vs "max 3 parts"; "research without save_to NEVER creates a file" twice; "verify arithmetic step-by-step" vs "calculate, never in head"; "do not ask user to choose" vs "ask once"; test/coding rules (unittest, 100-line files) sent every turn, candidate for a skill.
+
+Update v1.8.0 (prompt lines added) [UNVERIFIED applied]:
+- Triage, first lines: docs/API/usage of ANY library, framework, SDK → `resolve-library-id` then `query-docs`, never `web_search`/`research`. Academic papers/arXiv/preprints → `search_papers` then `download_paper` then `read_doc`/`search_docs`. Both marked "Overrides cheapest-path rule".
+- Tool lines: `resolve-library-id(libraryName, query)`, `query-docs(libraryId, query)`, `search_papers(query)`, `download_paper(paper_id)` saves and indexes full paper as `arxiv_<id>.md`, never `ingest_doc`/`write_file` after it.
+- `web_search` and `research` descriptions in `tools_schema.py` now say: never for library docs or arXiv.
 ---
 
 ## 10. Remote LLM and embedding server (Kaggle notebook)
@@ -528,7 +541,7 @@ Behavioral and code conventions the project follows. Keep them when adding featu
 7. Update this doc (Section 6 + Changelog).
 
 ### Recipe: add a new MCP server
-Add to `MCP_SERVERS` in `mcp_client.py`, add tool names to `ALLOWED` (and `HIDDEN_TOOLS` if internal only). Schemas auto-register.
+~~Add to `MCP_SERVERS` in `mcp_client.py`, add tool names to `ALLOWED` (and `HIDDEN_TOOLS` if internal only). Schemas auto-register.~~ → Add to `MCP_SERVERS`, add tool names to `ALLOWED` (and `HIDDEN_TOOLS` if internal only). Hand-write the schema in `tools_schema.py` with required args and an example in the description, add an entry to `EXAMPLES` in `tools.py`, add prompt triage line plus tool line, then run a test prompt WITHOUT naming the tool. Auto schemas only for simple one-arg tools. Check output size vs the 5000-char cap in `call_tool`. All `StdioServerParameters.args` must be `str` (wrap `Path` with `str()`). *(corrected v1.8.0)*
 
 ### Recipe: add a REPL slash command
 Add an `if cmd == ...` branch in `main.py` before the `held = list(pending)` line.
@@ -610,6 +623,17 @@ Ordered roughly by impact. Fix or acknowledge before piling on features.
 56. Per-turn context: long prompt (about 190 lines of rules) plus all tool schemas on every turn. Each new tool worsens item 30. Measure chars/4 at startup before adding more.
 57. Doc drift found v1.7.0: scheduler is_busy (see Section 5), commands list, streaming, guards. Re-audit after next file upload.
 58. `export_doc` +1 tool, worsens item 30. Needs `pandoc` on PATH (winget install JohnMacFarlane.Pandoc). Extra stdio server adds startup time (item 10). Raw `convert-contents` has no path sandbox, so it stays hidden. Bug found at integration: async tool placed in LOCAL_TOOLS returned an un-awaited coroutine and the 9B reported success. Async tools must be special-cased in `call_tool` above the LOCAL_TOOLS check.
+59. Auto-registered MCP schemas make the 9B model send `{}` for required args (seen: `resolve-library-id`, `download_paper`, `read_paper`). Raw server error returned, then dedup guard blocks retries. Fix: hand-written schemas plus `missing_args` hint with example. Description cut `[:500]` can also chop arg guidance. **[FIXED in v1.8.0]** for Context7 and arXiv tools. Still open for any future MCP tool.
+60. Model prefers `web_search`/`research` over MCP tools unless the user names the tool. Seen: Next.js and FastMCP docs queries skipped Context7, one invented "several sources" with no evidence. Prompt triage alone not enough. Code guard proposed: block `web_search`/`research` when query matches `DOCS_RE`/`ARXIV_RE` and the matching MCP tool not used this turn; reset flag each user message. Regex false positives ("package", "papers"). [UNVERIFIED applied]
+61. `call_tool` caps MCP output at 5000 chars. `download_paper` returns 12000-char pages (`is_truncated`, `next_start`) of 38255-char papers. Model never pages, answers from intro/abstract and presents it as "the conclusion". Fix: `download_paper_full` loops pages in code. Key names `start`, `content`/`text`, `next_start` guessed from log. Probe real names before trusting. [UNVERIFIED applied]
+62. `arxiv-mcp-server` returns paper text inline from the arXiv HTML endpoint. It saved no file in `WORKSPACE`. Model guessed filenames (`1706.03762.html`) and `ingest_doc` failed. `--storage-path` is harmless, not the fix.
+63. Model calls `write_file` unrequested (3 runs) then says "saved". Fix proposed: block `write_file`/`edit_file` unless user text matches `WRITE_RE` (`save|write|file|export|store|note`). [UNVERIFIED applied]
+64. Model gives final answer with no evidence tool (made-up conclusion section, fake "logged in memory", "scam" from Z-Library hits). Fix proposed: post-turn check, doc/paper question needs successful `read_doc`/`search_docs`/`query-docs` this turn, else force "Could not read..." reply. [UNVERIFIED applied]
+65. Persona tail ("Done. Your files are organized. You're welcome. Again.") printed after failed turns and wrong answers. Fix proposed: strip tail when any tool result this turn started with `error:`. [UNVERIFIED applied]
+66. Dedup guard counts failures from before state changed (`ingest_doc` blocked after file was written). Fix proposed: clear fail counters after any non-`error:` result; check `missing_args` before dedup so the hint is seen. [UNVERIFIED applied]
+67. Skill router `sim` 0.41 to 0.55 for `frontend-design` on every docs query, once exactly at `SIM_MIN`. Router is noise for these tasks. Proposed `SIM_MIN` 0.65 (see item 36).
+68. +4 tools (`resolve-library-id`, `query-docs`, `search_papers`, `download_paper`), worsens item 30. Extra stdio servers add startup time (item 10); first `uvx arxiv-mcp-server` run downloads deps.
+69. `StdioServerParameters.args` rejects `Path`. `WORKSPACE` from `config` is `Path`, must be `str(WORKSPACE)`. **[FIXED in v1.8.0]**
 
 ---
 
@@ -673,6 +697,7 @@ Compare to Section 3/6; list differences you found; then apply the procedure.
 | 1.6.0 | 2026-11-20 | Added `air_sun_tool.py` (`air_quality` via Open-Meteo CAMS, `sun_times` via `astral`), deps `astral`/`tzdata`, and known issue 50. | 3, 6, 9, 13, 15, 16.8 |
 | 1.7.0 | 2026-11-21 | Added repo tool (repo_tool.py) design, doc drift corrections (streaming, guards, REPL commands, voice_in), prompt audit, planned astro MCP project (16.10). Known issues 51-57. | 3, 4, 5, 6, 9, 13, 15, 16.9, 16.10, 17 |
 | 1.7.1 | 2026-11-22 | Added pandoc MCP (hidden `convert-contents`) wrapped by `export_tool.py` `export_doc`, workspace-locked, GATED. Fixed LOCAL_TOOLS async slip. Known issue 58. | 3, 4, 5, 6, 9, 13 |
+| 1.8.0 | 2026-11-23 | Added Context7 MCP (`resolve-library-id`, `query-docs`) and arXiv MCP (`search_papers`, `download_paper`, `list_papers`). Hand-written schemas for all MCP tools, schema dedupe in `connect_mcp`, `EXAMPLES` + `missing_args` hint. `download_paper_full` pager. Decided against memory MCP and Serena. Known issues 59-69. Guards and prompt lines marked `[UNVERIFIED applied]`. | 2, 6, 9, 11, 13, 15, 16.11, 17 |
 
 <!-- APPEND NEW CHANGELOG ROWS ABOVE THIS LINE, KEEP TABLE FORMAT -->
 
@@ -789,6 +814,26 @@ Separate project astro-mcp, own venv, installed or spawned by Ultron as a stdio 
 - Rules: stdout is protocol, never print (log to stderr); tools return facts only, LLM writes prose; no ascendant without birth time; entertainment label; validate against a known chart before trust.
 - Licence: pyswisseph is AGPL or paid commercial. Personal use ok.
 - Ideas not started: dasha tool; palm reader (MediaPipe Hands in browser, local only, entertainment); standalone geolocate tool (overlaps weather_tool.geocode, prefer reuse).
+
+## 16.11 Context7 and arXiv MCP (v1.8.0)
+
+Files: `mcp_client.py`, `tools_schema.py`, `tools.py`, `SYSTEM_PROMPT.py`.
+
+Context7:
+- `MCP_SERVERS["context7"]` = `npx -y @upstash/context7-mcp`. Flow: `resolve-library-id(libraryName, query)` returns candidate IDs; `query-docs(libraryId, query)` returns doc snippets with source URL.
+- Verified working (Pydantic `model_validator(mode="after")` returned correct code). Prompt naming the tools worked first; unnamed docs queries needed triage rule plus guard (item 60).
+
+arXiv:
+- `MCP_SERVERS["arxiv"]` = `uvx arxiv-mcp-server --storage-path str(WORKSPACE)`.
+- `search_papers` returns JSON (`id`, `versioned_id`, `title`, `authors`, snippet abstract). `download_paper` returns paged JSON (`content_length`, `returned_chars`, `next_start`, `is_truncated`).
+- Verified working with `download_paper_full` pager: `1706.03762` conclusion summary read from indexed file. Exact wrapper key names `[UNVERIFIED]` (item 61).
+- Intended chain: `search_papers` → `download_paper` (pages, writes `arxiv_<id>.md`, indexes) → `read_doc` last part or `search_docs`.
+
+Evaluated and rejected:
+- `@modelcontextprotocol/server-memory` (knowledge graph): overlaps `save_memory` (`memory.md`) and `recall`. Three memory systems confuse the 9B model. Nested array-of-object schemas risk the `{}` bug. Revisit only if entity/relation queries become a real need.
+- `oraios/serena` (symbol-level code navigation): ~20 tools overlapping `read_file`/`edit_file`/`run_command`, needs active project path, slow language-server startup, worsens item 30. Revisit only for navigating large cloned repos, read-only subset.
+
+Test prompts (run without naming tools): Next.js `await params` docs; "Find 3 recent arXiv papers on speculative decoding"; "Download arXiv paper 1706.03762 and summarize the conclusion section" (expect future-work content: other modalities, local attention, less sequential generation, not abstract BLEU numbers); fake library name (expect "not found"); `Latest news on OpenAI` (expect `web_search`, not `search_papers`).
 ---
 
 ## 17. Roadmap / planned features (append only)
@@ -816,6 +861,9 @@ Separate project astro-mcp, own venv, installed or spawned by Ultron as a stdio 
 - [ ] Telegram: to_thread read_you, MAX_AGE filter, tg_print, source tag on log lines
 - [ ] Print prompt/tool token estimate at startup
 - [ ] Build astro-mcp (16.10), then register in Ultron
+- [ ] Raise `SIM_MIN` to 0.65 after more `[skill] best=... sim=...` logs
+- [ ] Per-tool hand schema check at startup: print schema for each MCP tool, warn if no entry in `EXAMPLES`
+- [ ] Post-turn verifier in `agent.py`: block claims of "saved/logged/done" without matching `wrote:`/`indexed:`/`saved:` result
 <!-- Mark done as `- [x] ... (vX.Y.Z)`, never delete items. -->
 
 ---

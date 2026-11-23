@@ -638,4 +638,63 @@ TOOL_SCHEMAS = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "resolve-library-id",
+            "description": "Step 1 of docs lookup. Find Context7 library ID from package name. Both args required.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "libraryName": {"type": "string", "description": "Package name, e.g. 'pydantic'."},
+                    "query": {"type": "string", "description": "What user wants, e.g. 'model_validator mode after'."},
+                },
+                "required": ["libraryName", "query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query-docs",
+            "description": "Step 2 of docs lookup. Fetch docs. libraryId must be copied from resolve-library-id result, e.g. '/pydantic/pydantic'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "libraryId": {"type": "string", "description": "ID like /org/project. From step 1."},
+                    "query": {"type": "string", "description": "Specific question."},
+                },
+                "required": ["libraryId", "query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_papers",
+            "description": "Search arXiv. query required. Result has 'id' per paper: pass it to download_paper.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search terms, e.g. 'diffusion models'."},
+                    "max_results": {"type": "integer", "description": "1 to 10. Default 5."},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "download_paper",
+            "description": "Download arXiv paper. paper_id required: copy the 'id' field from search_papers result, e.g. '2106.09685'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "paper_id": {"type": "string", "description": "arXiv ID from search_papers, e.g. '2106.09685'."},
+                },
+                "required": ["paper_id"],
+            },
+        },
+    },
 ]

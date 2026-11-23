@@ -25,6 +25,8 @@ from telegram_tool import send_telegram, read_telegram
 from repo_tool import repo
 from text_ui import SOURCE
 from export_tool import export_doc
+import re
+import json
 
 def set_browser_mode(mode: str) -> str:
     if mode not in ("headless", "visible"):
@@ -33,6 +35,41 @@ def set_browser_mode(mode: str) -> str:
         return f"error: {mode} browser not connected"
     browser_state["mode"] = mode
     return f"browser mode: {mode}. Page state not carried over. Call browser_navigate again."
+
+async def download_paper_full(paper_id: str) -> str:
+    parts, start = [], 0
+    for _ in range(12):
+        r = await mcp_session["download_paper"].call_tool(
+            "download_paper", {"paper_id": paper_id, "start": start})
+        raw = "\n".join(c.text for c in r.content if hasattr(c, "text"))
+        try:
+            d = json.loads(raw)
+        except ValueError:
+            return f"error: bad response: {raw[:200]}"
+        if d.get("status") != "success":
+            return f"error: {raw[:300]}"
+        parts.append(d.get("content", ""))
+        if not d.get("is_truncated"):
+            break
+        start = d["next_start"]
+    text = "".join(parts)
+    if not text.strip():
+        return "error: empty paper text"
+    name = f"arxiv_{paper_id.replace('/', '_')}.md"
+    LOCAL_TOOLS["write_file"](filename=name, contents=text)
+    return LOCAL_TOOLS["ingest_doc"](filename=name)
+
+EXAMPLES = {
+    "resolve-library-id": '{"libraryName": "pydantic", "query": "model_validator mode after"}',
+    "query-docs": '{"libraryId": "/pydantic/pydantic", "query": "model_validator mode after"}',
+    "download_paper": '{"paper_id": "2106.09685"}',
+    "search_papers": '{"query": "speculative decoding", "max_results": 5}',
+}
+
+DOCS_RE = re.compile(r"\b(docs?|documentation|api|sdk|framework|library|package)\b", re.I)
+ctx7_state = {"used": False}
+ARXIV_RE = re.compile(r"\b(arxiv|papers?|preprints?)\b", re.I)
+arxiv_state = {"used": False}
 
 # Local initialised tools
 LOCAL_TOOLS = {
@@ -65,6 +102,16 @@ async def call_tool(name: str, args: dict) -> str:
             return "The user declined: this needs confirmation at the PC."
         if ask(f"\n Confirm {name} {args}? [y/N] ").strip().lower() != "y":
             return "The user declined this action"
+    if name == "resolve-library-id":
+        ctx7_state["used"] = True
+    if name in ("web_search", "research") and not ctx7_state["used"] \
+            and DOCS_RE.search(args.get("query", "")):
+        return "error: library docs need resolve-library-id then query-docs. Call resolve-library-id first."
+    if name == "search_papers":
+        arxiv_state["used"] = True
+    if name in ("web_search", "research") and not arxiv_state["used"] \
+            and ARXIV_RE.search(args.get("query", "")):
+        return "error: papers need search_papers first. Call search_papers."
     if name == "research":
         return await research(**args)
     if name == "ingest_url":
@@ -73,6 +120,8 @@ async def call_tool(name: str, args: dict) -> str:
         return await ocr_image(**args)
     if name in LOCAL_TOOLS:
         return LOCAL_TOOLS[name](**args)
+    if name == "download_paper":
+        return await download_paper_full(**args)
     if name == "get_weather":
         return await get_weather(**args)
     if name == "youtube_transcript":
@@ -127,6 +176,9 @@ async def call_tool(name: str, args: dict) -> str:
             return f"error: {browser_state['mode']} browser not connected"
         result = await s.call_tool(name, args)
         return "\n".join(c.text for c in result.content if hasattr(c, "text"))[:8000]
+    miss = missing_args(name, args)
+    if miss:
+        return f"error: missing {miss}. Resend with real values, e.g. {EXAMPLES.get(name, '')}"
     result = await mcp_session[name].call_tool(name, args)
     return "\n".join(c.text for c in result.content if hasattr(c, "text"))[:5000]
 
