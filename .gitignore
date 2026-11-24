@@ -17,3 +17,4 @@ dbg.py
 recall/
 trace.jsonl
 schedules.json
+galaxy.json

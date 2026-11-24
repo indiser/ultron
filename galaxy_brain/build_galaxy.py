@@ -2,8 +2,8 @@ import json
 import numpy as np
 import umap
 
-LOG = "recall/chat_log.jsonl"
-VEC = "recall/vecs.npy"
+LOG = "../recall/chat_log.jsonl"
+VEC = "../recall/vecs.npy"
 
 rows = [json.loads(l) for l in open(LOG, encoding="utf-8") if l.strip()]
 vecs = np.load(VEC)
@@ -33,5 +33,5 @@ out = [
     }
     for p, r in zip(pts, rows)
 ]
-json.dump(out, open("galaxy.json", "w", encoding="utf-8"))
+json.dump(out, open("galaxy.json", "w", encoding="utf-8"), indent = 4)
 print("wrote galaxy.json:", len(out), "stars")
