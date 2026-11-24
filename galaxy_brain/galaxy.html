@@ -1,0 +1,859 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Galaxy of Mind</title>
+<style>
+  :root {
+    --bg: #02040a;
+    --panel: rgba(6, 11, 24, 0.68);
+    --border: rgba(125, 185, 255, 0.16);
+    --border-hi: rgba(125, 210, 255, 0.42);
+    --text: #dce8ff;
+    --muted: rgba(165, 192, 235, 0.58);
+    --user: #4deeea;
+    --bot: #ffb85c;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; width: 100%; height: 100%;
+    background: var(--bg); overflow: hidden;
+    font-family: var(--sans); color: var(--text);
+    user-select: none; -webkit-font-smoothing: antialiased;
+  }
+  canvas { display: block; width: 100%; height: 100%; cursor: grab; }
+  canvas:active { cursor: grabbing; }
+
+  .glass {
+    background: var(--panel);
+    backdrop-filter: blur(14px) saturate(140%);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+    border: 1px solid var(--border);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  }
+
+  #hud-top-left {
+    position: fixed; left: 20px; top: 18px;
+    pointer-events: none;
+  }
+  .title-row {
+    display: flex; align-items: center; gap: 10px;
+    letter-spacing: 0.22em; font-size: 12px; font-weight: 600;
+    text-transform: uppercase; color: #eef5ff;
+  }
+  .pulse-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--user);
+    box-shadow: 0 0 10px var(--user);
+    animation: pulse 2.4s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.45; transform: scale(0.9); }
+    50% { opacity: 1; transform: scale(1.2); }
+  }
+  #telemetry {
+    margin-top: 6px; font-family: var(--mono); font-size: 11px;
+    color: var(--muted); letter-spacing: 0.06em;
+  }
+  #telemetry span { color: #b8d4ff; }
+
+  #hud-top-right {
+    position: fixed; right: 20px; top: 18px;
+    display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
+  }
+  .pill-row { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  .pill {
+    padding: 5px 10px; border-radius: 6px;
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.04em;
+    color: var(--muted); cursor: pointer;
+    transition: all 0.18s ease;
+  }
+  .pill:hover { border-color: var(--border-hi); color: var(--text); }
+  .pill.active {
+    color: #e8f6ff; border-color: rgba(77, 238, 234, 0.45);
+    background: rgba(20, 48, 72, 0.55);
+  }
+  .pill kbd {
+    color: var(--user); font-family: inherit; margin-right: 4px;
+  }
+
+  #search-wrap {
+    position: relative; width: 230px;
+  }
+  #search {
+    width: 100%; padding: 6px 26px 6px 10px; border-radius: 6px;
+    font-family: var(--mono); font-size: 11px; color: var(--text);
+    outline: none; transition: border-color 0.2s;
+  }
+  #search::placeholder { color: var(--muted); }
+  #search:focus { border-color: var(--border-hi); }
+  #search-count {
+    position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+    font-family: var(--mono); font-size: 10px; color: var(--user);
+    pointer-events: none;
+  }
+
+  #inspector {
+    position: fixed; left: 20px; bottom: 20px;
+    width: min(440px, calc(100vw - 40px));
+    padding: 14px 16px; border-radius: 10px;
+    opacity: 0; transform: translateY(8px);
+    pointer-events: none;
+    transition: opacity 0.22s ease, transform 0.22s ease, border-color 0.22s ease;
+  }
+  #inspector.visible {
+    opacity: 1; transform: translateY(0); pointer-events: auto;
+  }
+  .ins-head {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 8px; font-family: var(--mono); font-size: 11px;
+  }
+  .badge {
+    padding: 2px 7px; border-radius: 4px; font-weight: 600;
+    letter-spacing: 0.08em; text-transform: uppercase; font-size: 10px;
+  }
+  .badge.user {
+    color: var(--user); background: rgba(77, 238, 234, 0.12);
+    border: 1px solid rgba(77, 238, 234, 0.32);
+  }
+  .badge.bot {
+    color: var(--bot); background: rgba(255, 184, 92, 0.12);
+    border: 1px solid rgba(255, 184, 92, 0.32);
+  }
+  .ins-meta { color: var(--muted); }
+  #ins-text {
+    font-size: 13.5px; line-height: 1.55; color: #e4eeff;
+    white-space: pre-wrap; max-height: 180px; overflow-y: auto;
+    user-select: text; padding-right: 4px;
+  }
+  #ins-text::-webkit-scrollbar { width: 4px; }
+  #ins-text::-webkit-scrollbar-thumb { background: rgba(140, 185, 255, 0.25); border-radius: 2px; }
+
+  #hint-bottom {
+    position: fixed; right: 20px; bottom: 20px;
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+    letter-spacing: 0.04em; pointer-events: none; text-align: right;
+  }
+</style>
+</head>
+<body>
+
+<div id="hud-top-left">
+  <div class="title-row"><span class="pulse-dot"></span>Galaxy of Mind</div>
+  <div id="telemetry">STARS <span id="stat-nodes">0</span> &middot; SYNAPSES <span id="stat-edges">0</span> &middot; FLUX <span id="stat-pulses">0</span></div>
+</div>
+
+<div id="hud-top-right">
+  <div class="pill-row">
+    <div class="pill active" id="btn-lines"><kbd>L</kbd>SYNAPSES</div>
+    <div class="pill active" id="btn-thread"><kbd>T</kbd>THREAD</div>
+    <div class="pill" id="btn-bloom"><kbd>B</kbd>BLOOM <span id="bloom-val">0.85</span></div>
+    <div class="pill" id="btn-pause"><kbd>SPC</kbd>LIVE</div>
+    <div class="pill" id="btn-reset"><kbd>R</kbd>CORE</div>
+  </div>
+  <div id="search-wrap">
+    <input id="search" class="glass" type="text" placeholder="[/] Filter thoughts..." spellcheck="false">
+    <span id="search-count"></span>
+  </div>
+</div>
+
+<div id="inspector" class="glass">
+  <div class="ins-head">
+    <span id="ins-badge" class="badge user">USER</span>
+    <span id="ins-meta" class="ins-meta"></span>
+  </div>
+  <div id="ins-text"></div>
+</div>
+
+<div id="hint-bottom">DRAG ORBIT &middot; WHEEL ZOOM &middot; CLICK STAR FIRE &amp; FOCUS &middot; DBL-CLICK RESET</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/CopyShader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/shaders/LuminosityHighPassShader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/postprocessing/UnrealBloomPass.js"></script>
+
+<script>
+(async () => {
+  // ===== TUNING CONSTANTS =====
+  const BLOOM_LEVELS = [0.0, 0.45, 0.85, 1.35];
+  let bloomIdx = 2;
+  const K_SYNAPSES = 3;
+  const N_PULSES = 90;
+  const MIN_ZOOM = 38;
+  const MAX_ZOOM = 680;
+  // ============================
+
+  // Load galaxy.json or synthesize fallback spiral manifold if offline
+  let data;
+  try {
+    const res = await fetch("galaxy.json");
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    data = await res.json();
+  } catch {
+    data = Array.from({ length: 180 }, (_, i) => {
+      const arm = i % 3;
+      const t = i / 180;
+      const angle = t * 9.5 + (arm * Math.PI * 2) / 3 + (Math.random() - 0.5) * 0.45;
+      const radius = 22 + t * 145 + (Math.random() - 0.5) * 18;
+      return {
+        x: Math.cos(angle) * radius,
+        y: (Math.random() - 0.5) * (36 * (1 - t * 0.55)),
+        z: Math.sin(angle) * radius,
+        t: `T-${String(180 - i).padStart(3, "0")}`,
+        role: i % 2 === 0 ? "user" : "assistant",
+        text: i % 2 === 0
+          ? `Query vector #${i}: mapping latent semantic manifold across cluster ${arm + 1}.`
+          : `Synthesis #${i}: resonance stabilized across ${K_SYNAPSES} nearest synaptic neighbors.`
+      };
+    });
+  }
+
+  const n = data.length;
+  const PR = Math.min(devicePixelRatio || 1, 2);
+
+  // Renderer & Cinematic Post-Processing
+  const scene = new THREE.Scene();
+  scene.fog = new THREE.FogExp2(0x02040a, 0.00105);
+
+  const cam = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.5, 3200);
+  const ren = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+  ren.setPixelRatio(PR);
+  ren.setSize(innerWidth, innerHeight);
+  ren.toneMapping = THREE.ACESFilmicToneMapping;
+  ren.toneMappingExposure = 1.15;
+  document.body.appendChild(ren.domElement);
+
+  const composer = new THREE.EffectComposer(ren);
+  composer.addPass(new THREE.RenderPass(scene, cam));
+  const bloom = new THREE.UnrealBloomPass(
+    new THREE.Vector2(innerWidth, innerHeight),
+    BLOOM_LEVELS[bloomIdx],
+    0.72,
+    0.38
+  );
+  composer.addPass(bloom);
+
+  // Astrophysical Color Palette (Role + Temporal Temperature Shift)
+  const P = data.map(d => new THREE.Vector3(d.x, d.y, d.z));
+  const baseCol = data.map((d, i) => {
+    const age = i / Math.max(1, n - 1);
+    const c = new THREE.Color();
+    if (d.role === "user") {
+      // Deep electric sapphire -> bright cyan-ice
+      c.setHSL(0.55 - age * 0.04, 0.88, 0.56 + age * 0.1);
+    } else {
+      // Warm amber-gold -> soft coral-rose
+      c.setHSL(0.10 - age * 0.04, 0.92, 0.58 + age * 0.08);
+    }
+    return c;
+  });
+
+  const baseSize = data.map(d => (d.role === "user" ? 8.2 : 6.4));
+  const flare = new Float32Array(n);
+  const dimFactor = new Float32Array(n).fill(1.0);
+
+  // 1. Deep Celestial Starfield (2400 background stars)
+  {
+    const bgCount = 2400;
+    const bgPos = new Float32Array(bgCount * 3);
+    const bgCol = new Float32Array(bgCount * 3);
+    const tmp = new THREE.Color();
+    for (let i = 0; i < bgCount; i++) {
+      const u = Math.random(), v = Math.random();
+      const th = 2 * Math.PI * u;
+      const ph = Math.acos(2 * v - 1);
+      const r = 750 + Math.random() * 1100;
+      bgPos.set([r * Math.sin(ph) * Math.cos(th), r * Math.cos(ph), r * Math.sin(ph) * Math.sin(th)], i * 3);
+      const temp = Math.random();
+      if (temp < 0.33) tmp.setHSL(0.58, 0.5, 0.72);
+      else if (temp < 0.66) tmp.setHSL(0.11, 0.45, 0.75);
+      else tmp.setHSL(0.65, 0.2, 0.85);
+      const lum = 0.25 + Math.random() * 0.65;
+      bgCol.set([tmp.r * lum, tmp.g * lum, tmp.b * lum], i * 3);
+    }
+    const bgGeo = new THREE.BufferGeometry();
+    bgGeo.setAttribute("position", new THREE.BufferAttribute(bgPos, 3));
+    bgGeo.setAttribute("color", new THREE.BufferAttribute(bgCol, 3));
+    scene.add(new THREE.Points(bgGeo, new THREE.PointsMaterial({
+      size: 1.8, vertexColors: true, transparent: true, opacity: 0.75, depthWrite: false, fog: false
+    })));
+  }
+
+  // 2. Volumetric Galactic Nebula Clouds
+  {
+    const nebCount = 160;
+    const nebPos = new Float32Array(nebCount * 3);
+    const nebCol = new Float32Array(nebCount * 3);
+    const nebSize = new Float32Array(nebCount);
+    const tmp = new THREE.Color();
+    for (let i = 0; i < nebCount; i++) {
+      const ref = P[(Math.random() * n) | 0];
+      nebPos.set([
+        ref.x + (Math.random() - 0.5) * 90,
+        ref.y + (Math.random() - 0.5) * 45,
+        ref.z + (Math.random() - 0.5) * 90
+      ], i * 3);
+      tmp.setHSL(Math.random() < 0.6 ? 0.58 : 0.09, 0.75, 0.32);
+      nebCol.set([tmp.r, tmp.g, tmp.b], i * 3);
+      nebSize[i] = 75 + Math.random() * 110;
+    }
+    const nebGeo = new THREE.BufferGeometry();
+    nebGeo.setAttribute("position", new THREE.BufferAttribute(nebPos, 3));
+    nebGeo.setAttribute("aColor", new THREE.BufferAttribute(nebCol, 3));
+    nebGeo.setAttribute("aSize", new THREE.BufferAttribute(nebSize, 1));
+    const nebMat = new THREE.ShaderMaterial({
+      uniforms: { uPR: { value: PR } },
+      vertexShader: `
+        attribute float aSize; attribute vec3 aColor;
+        uniform float uPR; varying vec3 vC;
+        void main() {
+          vC = aColor;
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_PointSize = clamp(aSize * uPR * (280.0 / max(-mv.z, 1.0)), 4.0, 220.0 * uPR);
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: `
+        varying vec3 vC;
+        void main() {
+          float d = length(gl_PointCoord - 0.5) * 2.0;
+          if (d > 1.0) discard;
+          float g = exp(-d * d * 3.4) * (1.0 - d);
+          gl_FragColor = vec4(vC, g * 0.048);
+        }`,
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending
+    });
+    scene.add(new THREE.Points(nebGeo, nebMat));
+  }
+
+  // 3. Thought Stars (Diffraction Spikes + Blackbody Core Shader)
+  const starMat = new THREE.ShaderMaterial({
+    uniforms: { uPR: { value: PR } },
+    vertexShader: `
+      attribute float aSize;
+      attribute vec3 aColor;
+      attribute float aFlare;
+      attribute float aDim;
+      uniform float uPR;
+      varying vec3 vC;
+      varying float vFlare;
+      varying float vDim;
+      void main() {
+        vC = aColor;
+        vFlare = aFlare;
+        vDim = aDim;
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        float scale = 310.0 / max(-mv.z, 1.0);
+        gl_PointSize = clamp(aSize * uPR * scale, 2.0 * uPR, 54.0 * uPR);
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: `
+      varying vec3 vC;
+      varying float vFlare;
+      varying float vDim;
+      void main() {
+        vec2 uv = gl_PointCoord - 0.5;
+        float d = length(uv);
+        if (d > 0.5) discard;
+        float halo = pow(max(0.0, 1.0 - d * 2.0), 2.8);
+        float core = smoothstep(0.16, 0.0, d);
+        float ax = max(0.0, 1.0 - abs(uv.x) * 28.0) * max(0.0, 1.0 - abs(uv.y) * 2.6);
+        float ay = max(0.0, 1.0 - abs(uv.y) * 28.0) * max(0.0, 1.0 - abs(uv.x) * 2.6);
+        float spikes = (ax + ay) * (0.22 + vFlare * 0.7) * smoothstep(0.5, 0.04, d);
+        vec3 hot = mix(vC, vec3(1.0, 0.98, 0.95), clamp(core * 0.72 + vFlare * 0.35, 0.0, 1.0));
+        float alpha = (halo * 0.52 + core * 0.95 + spikes) * vDim;
+        gl_FragColor = vec4(hot * (1.0 + vFlare * 0.55), alpha);
+      }`,
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending
+  });
+
+  const nPos = new Float32Array(n * 3);
+  const nCol = new Float32Array(n * 3);
+  const nSize = new Float32Array(n);
+  const nFlare = new Float32Array(n);
+  P.forEach((p, i) => nPos.set([p.x, p.y, p.z], i * 3));
+
+  const nGeo = new THREE.BufferGeometry();
+  nGeo.setAttribute("position", new THREE.BufferAttribute(nPos, 3));
+  nGeo.setAttribute("aColor", new THREE.BufferAttribute(nCol, 3));
+  nGeo.setAttribute("aSize", new THREE.BufferAttribute(nSize, 1));
+  nGeo.setAttribute("aFlare", new THREE.BufferAttribute(nFlare, 1));
+  nGeo.setAttribute("aDim", new THREE.BufferAttribute(dimFactor, 1));
+  const nodes = new THREE.Points(nGeo, starMat);
+  scene.add(nodes);
+
+  // 4. Synaptic Graph (K-Nearest Neighbors with Dynamic Excitation)
+  const seen = new Set();
+  const edges = [];
+  const adj = Array.from({ length: n }, () => []);
+  for (let i = 0; i < n; i++) {
+    const near = P.map((p, j) => [p.distanceToSquared(P[i]), j])
+      .filter(a => a[1] !== i)
+      .sort((a, b) => a[0] - b[0])
+      .slice(0, K_SYNAPSES);
+    for (const [, j] of near) {
+      const key = i < j ? `${i}-${j}` : `${j}-${i}`;
+      if (seen.has(key)) continue;
+      const eIdx = edges.length;
+      seen.add(key);
+      edges.push([i, j]);
+      adj[i].push({ to: j, edge: eIdx });
+      adj[j].push({ to: i, edge: eIdx });
+    }
+  }
+
+  const eCount = edges.length;
+  const ePos = new Float32Array(eCount * 6);
+  const eCol = new Float32Array(eCount * 6);
+  const edgeGlow = new Float32Array(eCount);
+  edges.forEach(([a, b], k) => {
+    ePos.set([P[a].x, P[a].y, P[a].z, P[b].x, P[b].y, P[b].z], k * 6);
+  });
+  const eGeo = new THREE.BufferGeometry();
+  eGeo.setAttribute("position", new THREE.BufferAttribute(ePos, 3));
+  eGeo.setAttribute("color", new THREE.BufferAttribute(eCol, 3));
+  const lines = new THREE.LineSegments(eGeo, new THREE.LineBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.42,
+    depthWrite: false, blending: THREE.AdditiveBlending
+  }));
+  scene.add(lines);
+
+  // 5. Chronological Thread
+  const tPos = new Float32Array(Math.max(0, n - 1) * 6);
+  for (let i = 0; i < n - 1; i++) {
+    tPos.set([P[i].x, P[i].y, P[i].z, P[i + 1].x, P[i + 1].y, P[i + 1].z], i * 6);
+  }
+  const tGeo = new THREE.BufferGeometry();
+  tGeo.setAttribute("position", new THREE.BufferAttribute(tPos, 3));
+  const thread = new THREE.LineSegments(tGeo, new THREE.LineBasicMaterial({
+    color: 0x5c9eff, transparent: true, opacity: 0.11,
+    depthWrite: false, blending: THREE.AdditiveBlending
+  }));
+  scene.add(thread);
+
+  // 6. Velocity-Stretched Comet-Streak Pulses
+  const pulses = [];
+  const pPos = new Float32Array(N_PULSES * 6);
+  const pCol = new Float32Array(N_PULSES * 6);
+  const pGeo = new THREE.BufferGeometry();
+  pGeo.setAttribute("position", new THREE.BufferAttribute(pPos, 3));
+  pGeo.setAttribute("color", new THREE.BufferAttribute(pCol, 3));
+  const pMesh = new THREE.LineSegments(pGeo, new THREE.LineBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.92,
+    depthWrite: false, blending: THREE.AdditiveBlending
+  }));
+  pMesh.frustumCulled = false;
+  scene.add(pMesh);
+
+  const respawn = p => {
+    const a = (Math.random() * n) | 0;
+    const nb = adj[a];
+    if (nb.length) {
+      const pick = nb[(Math.random() * nb.length) | 0];
+      p.from = a; p.to = pick.to; p.edge = pick.edge;
+    } else {
+      p.from = a; p.to = a; p.edge = -1;
+    }
+    p.t = Math.random();
+    p.speed = 24 + Math.random() * 34;
+    p.boost = 0;
+  };
+  for (let i = 0; i < N_PULSES; i++) {
+    const p = { from: 0, to: 0, edge: -1, t: 0, speed: 30, boost: 0 };
+    respawn(p);
+    pulses.push(p);
+  }
+
+  let pp = 0;
+  const fire = i => {
+    flare[i] = 1.45;
+    shockPos.copy(P[i]);
+    shockLife = 1.0;
+    shockCol.copy(baseCol[i]);
+    for (const nb of adj[i]) {
+      const p = pulses[pp++ % N_PULSES];
+      p.from = i; p.to = nb.to; p.edge = nb.edge;
+      p.t = 0; p.speed = 68; p.boost = 1.0;
+      if (nb.edge >= 0) edgeGlow[nb.edge] = 1.0;
+    }
+  };
+
+  // 7. 3D Holographic Target Reticle & Expanding Shockwave
+  const shockPos = new THREE.Vector3();
+  const shockCol = new THREE.Color(0x4deeea);
+  let shockLife = 0;
+
+  const reticleMat = new THREE.ShaderMaterial({
+    uniforms: {
+      uTime: { value: 0 },
+      uColor: { value: new THREE.Color(0x4deeea) },
+      uAlpha: { value: 0 }
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv - 0.5;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }`,
+    fragmentShader: `
+      uniform float uTime;
+      uniform vec3 uColor;
+      uniform float uAlpha;
+      varying vec2 vUv;
+      void main() {
+        float r = length(vUv) * 2.0;
+        float ang = atan(vUv.y, vUv.x);
+        float ring1 = smoothstep(0.035, 0.0, abs(r - 0.68));
+        float seg = step(0.15, sin(ang * 4.0 + uTime * 2.2));
+        float ring2 = smoothstep(0.02, 0.0, abs(r - 0.88)) * seg;
+        float a = (ring1 * 0.85 + ring2 * 0.55) * uAlpha;
+        if (a < 0.01) discard;
+        gl_FragColor = vec4(uColor + 0.25, a);
+      }`,
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending
+  });
+  const reticle = new THREE.Mesh(new THREE.PlaneGeometry(16, 16), reticleMat);
+  scene.add(reticle);
+
+  const shockMat = new THREE.ShaderMaterial({
+    uniforms: {
+      uProgress: { value: 0 },
+      uColor: { value: new THREE.Color(0x4deeea) }
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv - 0.5;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }`,
+    fragmentShader: `
+      uniform float uProgress;
+      uniform vec3 uColor;
+      varying vec2 vUv;
+      void main() {
+        float r = length(vUv) * 2.0;
+        float wave = smoothstep(0.08, 0.0, abs(r - uProgress));
+        float fade = (1.0 - uProgress) * (1.0 - uProgress);
+        float a = wave * fade * 0.9;
+        if (a < 0.01) discard;
+        gl_FragColor = vec4(uColor + 0.3, a);
+      }`,
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending
+  });
+  const shockMesh = new THREE.Mesh(new THREE.PlaneGeometry(46, 46), shockMat);
+  scene.add(shockMesh);
+
+  // Telemetry UI
+  document.getElementById("stat-nodes").textContent = n;
+  document.getElementById("stat-edges").textContent = eCount;
+  document.getElementById("stat-pulses").textContent = N_PULSES;
+
+  // Camera Physics & Damped Controls
+  let theta = 0.4, phi = 1.18, thV = 0, phV = 0;
+  let dist = 260, targetDist = 260;
+  const focusTarget = new THREE.Vector3(0, 0, 0);
+  const curTarget = new THREE.Vector3(0, 0, 0);
+
+  let drag = false, moved = 0, lx = 0, ly = 0;
+  let lastTouch = -1e9, hover = -1, selected = -1, paused = false;
+  const mouse = new THREE.Vector2(2, 2);
+
+  const inspector = document.getElementById("inspector");
+  const insBadge = document.getElementById("ins-badge");
+  const insMeta = document.getElementById("ins-meta");
+  const insText = document.getElementById("ins-text");
+
+  const showNode = idx => {
+    const d = data[idx];
+    inspector.classList.add("visible");
+    const isUser = d.role === "user";
+    insBadge.textContent = isUser ? "USER" : "ASSISTANT";
+    insBadge.className = "badge " + (isUser ? "user" : "bot");
+    insMeta.textContent = `${d.t || ""} · NODE #${idx} · ${adj[idx].length} SYNAPSES`;
+    insText.textContent = d.text || "";
+  };
+
+  const resetCamera = () => {
+    focusTarget.set(0, 0, 0);
+    targetDist = 260;
+    selected = -1;
+    inspector.classList.remove("visible");
+  };
+
+  ren.domElement.addEventListener("mousedown", e => {
+    drag = true; moved = 0; lx = e.clientX; ly = e.clientY;
+    lastTouch = performance.now();
+  });
+  addEventListener("mouseup", () => {
+    if (drag && moved < 5) {
+      if (hover >= 0) {
+        selected = hover;
+        fire(hover);
+        showNode(hover);
+        focusTarget.copy(P[hover]);
+        targetDist = Math.min(targetDist, 155);
+      } else {
+        selected = -1;
+        inspector.classList.remove("visible");
+      }
+    }
+    drag = false;
+    lastTouch = performance.now();
+  });
+  ren.domElement.addEventListener("dblclick", () => {
+    if (hover < 0) resetCamera();
+  });
+  ren.domElement.addEventListener("wheel", e => {
+    e.preventDefault();
+    targetDist = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, targetDist * (1 + e.deltaY * 0.0012)));
+    lastTouch = performance.now();
+  }, { passive: false });
+
+  addEventListener("mousemove", e => {
+    if (drag) {
+      const dx = e.clientX - lx, dy = e.clientY - ly;
+      moved += Math.abs(dx) + Math.abs(dy);
+      thV = -dx * 0.0045;
+      phV = -dy * 0.0045;
+      theta += thV;
+      phi = Math.max(0.12, Math.min(3.02, phi + phV));
+      lx = e.clientX; ly = e.clientY;
+    }
+    mouse.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  });
+
+  // HUD Button & Hotkey Bindings
+  const btnLines = document.getElementById("btn-lines");
+  const btnThread = document.getElementById("btn-thread");
+  const btnBloom = document.getElementById("btn-bloom");
+  const bloomVal = document.getElementById("bloom-val");
+  const btnPause = document.getElementById("btn-pause");
+  const btnReset = document.getElementById("btn-reset");
+  const searchInput = document.getElementById("search");
+  const searchCount = document.getElementById("search-count");
+
+  const toggleLines = () => {
+    lines.visible = !lines.visible;
+    btnLines.classList.toggle("active", lines.visible);
+  };
+  const toggleThread = () => {
+    thread.visible = !thread.visible;
+    btnThread.classList.toggle("active", thread.visible);
+  };
+  const cycleBloom = () => {
+    bloomIdx = (bloomIdx + 1) % BLOOM_LEVELS.length;
+    bloom.strength = BLOOM_LEVELS[bloomIdx];
+    bloomVal.textContent = BLOOM_LEVELS[bloomIdx].toFixed(2);
+    btnBloom.classList.toggle("active", bloomIdx > 0);
+  };
+  const togglePause = () => {
+    paused = !paused;
+    btnPause.innerHTML = paused ? "<kbd>SPC</kbd>PAUSED" : "<kbd>SPC</kbd>LIVE";
+    btnPause.classList.toggle("active", paused);
+  };
+
+  btnLines.onclick = toggleLines;
+  btnThread.onclick = toggleThread;
+  btnBloom.onclick = cycleBloom;
+  btnPause.onclick = togglePause;
+  btnReset.onclick = resetCamera;
+
+  // Real-time Semantic Search Filter
+  searchInput.addEventListener("input", () => {
+    const q = searchInput.value.trim().toLowerCase();
+    if (!q) {
+      dimFactor.fill(1.0);
+      searchCount.textContent = "";
+      nGeo.attributes.aDim.needsUpdate = true;
+      return;
+    }
+    let matches = 0;
+    for (let i = 0; i < n; i++) {
+      const hit = (data[i].text || "").toLowerCase().includes(q) || (data[i].role || "").toLowerCase().includes(q);
+      dimFactor[i] = hit ? 1.25 : 0.12;
+      if (hit) {
+        matches++;
+        flare[i] = Math.max(flare[i], 0.45);
+      }
+    }
+    searchCount.textContent = matches;
+    nGeo.attributes.aDim.needsUpdate = true;
+  });
+
+  addEventListener("keydown", e => {
+    if (document.activeElement === searchInput) {
+      if (e.key === "Escape") {
+        searchInput.value = "";
+        searchInput.dispatchEvent(new Event("input"));
+        searchInput.blur();
+      }
+      return;
+    }
+    const k = e.key.toLowerCase();
+    if (k === "/") { e.preventDefault(); searchInput.focus(); }
+    else if (k === "t") toggleThread();
+    else if (k === "l") toggleLines();
+    else if (k === "b") cycleBloom();
+    else if (k === " ") { e.preventDefault(); togglePause(); }
+    else if (k === "r") resetCamera();
+    else if (k === "escape") resetCamera();
+  });
+
+  addEventListener("resize", () => {
+    cam.aspect = innerWidth / innerHeight;
+    cam.updateProjectionMatrix();
+    ren.setSize(innerWidth, innerHeight);
+    composer.setSize(innerWidth, innerHeight);
+  });
+
+  const ray = new THREE.Raycaster();
+  const clock = new THREE.Clock();
+
+  (function loop() {
+    const rawDt = Math.min(clock.getDelta(), 0.05);
+    const dt = paused ? 0 : rawDt;
+    const time = clock.elapsedTime;
+
+    // Camera Inertia & Focus Glide
+    if (!drag) {
+      theta += thV; thV *= 0.93;
+      phi = Math.max(0.12, Math.min(3.02, phi + phV)); phV *= 0.90;
+      if (!paused && performance.now() - lastTouch > 3200 && selected < 0) {
+        theta += 0.0014;
+      }
+    }
+    dist += (targetDist - dist) * (1 - Math.exp(-rawDt * 8));
+    curTarget.lerp(focusTarget, 1 - Math.exp(-rawDt * 6));
+
+    cam.position.set(
+      curTarget.x + dist * Math.sin(phi) * Math.sin(theta),
+      curTarget.y + dist * Math.cos(phi),
+      curTarget.z + dist * Math.sin(phi) * Math.cos(theta)
+    );
+    cam.lookAt(curTarget);
+
+    // Update Comet-Streak Pulses
+    for (let i = 0; i < N_PULSES; i++) {
+      const p = pulses[i];
+      const a = P[p.from], b = P[p.to];
+      const len = a.distanceTo(b) || 1;
+      p.t += (dt * p.speed) / len;
+      p.boost *= Math.pow(0.25, dt);
+
+      if (p.t >= 1) {
+        flare[p.to] = Math.max(flare[p.to], 0.72 + p.boost * 0.4);
+        if (p.edge >= 0) edgeGlow[p.edge] = Math.max(edgeGlow[p.edge], 0.85);
+        const opts = adj[p.to].filter(nb => nb.to !== p.from);
+        if (!opts.length || Math.random() < 0.07) {
+          respawn(p);
+        } else {
+          const nxt = opts[(Math.random() * opts.length) | 0];
+          p.from = p.to; p.to = nxt.to; p.edge = nxt.edge; p.t = 0;
+        }
+      }
+
+      const pa = P[p.from], pb = P[p.to];
+      const segLen = pa.distanceTo(pb) || 1;
+      const tailSpan = Math.min(0.48, 16.0 / segLen);
+      const tHead = Math.min(1, p.t);
+      const tTail = Math.max(0, tHead - tailSpan);
+
+      pPos[i * 6]     = pa.x + (pb.x - pa.x) * tTail;
+      pPos[i * 6 + 1] = pa.y + (pb.y - pa.y) * tTail;
+      pPos[i * 6 + 2] = pa.z + (pb.z - pa.z) * tTail;
+      pPos[i * 6 + 3] = pa.x + (pb.x - pa.x) * tHead;
+      pPos[i * 6 + 4] = pa.y + (pb.y - pa.y) * tHead;
+      pPos[i * 6 + 5] = pa.z + (pb.z - pa.z) * tHead;
+
+      const hot = 1.0 + p.boost * 0.6;
+      pCol.set([0.08, 0.22, 0.42, 1.0 * hot, 0.92 * hot, 0.74 * hot], i * 6);
+    }
+    pGeo.attributes.position.needsUpdate = true;
+    pGeo.attributes.color.needsUpdate = true;
+
+    // Dynamic Synapse Excitation Decay
+    const edgeDecay = Math.pow(0.08, dt);
+    for (let k = 0; k < eCount; k++) {
+      edgeGlow[k] *= edgeDecay;
+      const [a, b] = edges[k];
+      const g = edgeGlow[k];
+      const baseMul = 0.28 + g * 1.15;
+      const ca = baseCol[a], cb = baseCol[b];
+      eCol[k * 6]     = ca.r * baseMul + g * 0.35;
+      eCol[k * 6 + 1] = ca.g * baseMul + g * 0.42;
+      eCol[k * 6 + 2] = ca.b * baseMul + g * 0.50;
+      eCol[k * 6 + 3] = cb.r * baseMul + g * 0.35;
+      eCol[k * 6 + 4] = cb.g * baseMul + g * 0.42;
+      eCol[k * 6 + 5] = cb.b * baseMul + g * 0.50;
+    }
+    eGeo.attributes.color.needsUpdate = true;
+
+    // Star Breathing & Flare Decay
+    const decay = Math.pow(0.14, dt);
+    for (let i = 0; i < n; i++) {
+      flare[i] *= decay;
+      const f = flare[i];
+      const breathe = 1 + 0.06 * Math.sin(time * 1.6 + i * 0.7);
+      const br = 1 + f * 0.75;
+      nSize[i] = baseSize[i] * (1 + f * 0.95) * breathe;
+      nFlare[i] = f;
+      nCol[i * 3]     = baseCol[i].r * br;
+      nCol[i * 3 + 1] = baseCol[i].g * br;
+      nCol[i * 3 + 2] = baseCol[i].b * br;
+    }
+    nGeo.attributes.aSize.needsUpdate = true;
+    nGeo.attributes.aFlare.needsUpdate = true;
+    nGeo.attributes.aColor.needsUpdate = true;
+
+    // Raycast Hover & 3D Reticle
+    ray.params.Points.threshold = Math.max(1.8, dist * 0.014);
+    ray.setFromCamera(mouse, cam);
+    const hit = ray.intersectObject(nodes)[0];
+    if (hit) {
+      if (hit.index !== hover) flare[hit.index] = Math.max(flare[hit.index], 0.55);
+      hover = hit.index;
+      ren.domElement.style.cursor = "pointer";
+      if (selected < 0) showNode(hover);
+    } else {
+      hover = -1;
+      ren.domElement.style.cursor = drag ? "grabbing" : "grab";
+      if (selected < 0) inspector.classList.remove("visible");
+    }
+
+    const activeIdx = hover >= 0 ? hover : selected;
+    reticleMat.uniforms.uTime.value = time;
+    if (activeIdx >= 0) {
+      reticle.position.copy(P[activeIdx]);
+      reticle.quaternion.copy(cam.quaternion);
+      const s = Math.max(0.65, dist * 0.0055);
+      reticle.scale.set(s, s, 1);
+      reticleMat.uniforms.uColor.value.copy(baseCol[activeIdx]);
+      reticleMat.uniforms.uAlpha.value += (0.95 - reticleMat.uniforms.uAlpha.value) * 0.2;
+    } else {
+      reticleMat.uniforms.uAlpha.value *= 0.82;
+    }
+
+    // Expanding Shockwave Ring
+    if (shockLife > 0.005) {
+      shockLife = Math.max(0, shockLife - rawDt * 1.45);
+      shockMesh.visible = true;
+      shockMesh.position.copy(shockPos);
+      shockMesh.quaternion.copy(cam.quaternion);
+      shockMat.uniforms.uProgress.value = 1.0 - shockLife;
+      shockMat.uniforms.uColor.value.copy(shockCol);
+    } else {
+      shockMesh.visible = false;
+    }
+
+    composer.render();
+    requestAnimationFrame(loop);
+  })();
+})();
+</script>
+</body>
+</html>

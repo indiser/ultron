@@ -26,6 +26,7 @@ dependencies = [
     "sentence-transformers>=6.2.0",
     "sounddevice",
     "soundfile",
+    "umap-learn>=0.6.0",
     "websockets>=17.4",
     "youtube-transcript-api>=1.2.5",
 ]

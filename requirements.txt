@@ -21,3 +21,4 @@ pyyaml
 websockets
 astral
 youtube-transcript-api
+umap-learn
