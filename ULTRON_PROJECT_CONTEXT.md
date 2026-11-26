@@ -1,5 +1,5 @@
 <!--
-AI-CONTEXT-DOC | project: Ultron | doc-version: 1.8.0 | last-updated: 2026-11-23
+AI-CONTEXT-DOC | project: Ultron | doc-version: 1.9.0 | last-updated: 2026-11-26
 Update rules are in SECTION 14. Never overwrite; append.
 -->
 
@@ -46,7 +46,8 @@ Ultron is a local-first, Windows-first, terminal chat agent. It talks to an Open
 | Client libs added | `httpx`, `Pillow` (in `ocr_tool.py`) |
 | Other MCP (added v1.8.0) | `@upstash/context7-mcp` via `npx -y` (library docs), `arxiv-mcp-server` via `uvx` (arXiv search/download) |
 | MCP config import | `mcp_client.py` now imports `WORKSPACE` from `config` |
-
+| Other MCP (added v1.9.0) | `vedic-astro-mcp` (separate repo, FastMCP + `pyswisseph`) via `uv --directory <VEDIC_DIR> run main.py`. Path from env, see Section 4 |
+| Client libs added v1.9.0 | `flask`, `httpx` (`birth_form.py`) |
 ---
 
 ## 3. File structure
@@ -86,6 +87,8 @@ project/
 ├── github_tool.py       # NEW v1.4.0: github() read-only GitHub API tool (repo, tree, read, item, PRs/issues/notifications) + link parser
 ├── skills_install.py    # NEW v1.3.0: install_skill(source), remove_skill(name), GitHub zip download + safe extract [UNVERIFIED applied]
 ├── repo_tool.py         # NEW v1.7.0: repo() clone/list/info/setup/run/remove for GitHub repos in workspace/repos [UNVERIFIED applied]
+├── astro_dispatch.py    # NEW v1.9.0: collect_birth_details(), run_birth_tool(), BIRTH_TOOLS, BIRTH_KEYS, birth_state (global)
+├── birth_form.py        # NEW v1.9.0: collect_birth(): Flask form on 127.0.0.1 random port, Open-Meteo geocode, DST check, returns birth dict
 ├── voice_in.py          # STT class (websocket speech-to-text), enabled by STT_WS_URL
 ├── trace.jsonl          # (runtime) agent.py trace(): events tool, guard, final
 ├── workspace/repos/     # (runtime) cloned repos, folder name owner__name
@@ -150,6 +153,11 @@ tools → repo_tool (repo)
 repo_tool → config (WORKSPACE)
 main → voice_in (STT)
 agent → skills_install (source_in_text), text_ui (c, SOURCE)
+tools → astro_dispatch (BIRTH_TOOLS, collect_birth_details, run_birth_tool)
+astro_dispatch → birth_form (collect_birth), mcp_client (mcp_session)
+birth_form → flask, werkzeug, httpx, zoneinfo
+mcp_client → config (WORKSPACE, VEDIC_DIR)
+RULE: mcp_client must never import astro_dispatch (circular import).
 
 ```
 `tools.py` and `shell_tool.py`/`file_tools.py` use `from X import *`. Watch for name collisions when adding module-level names.
@@ -192,6 +200,7 @@ Env vars:
 | `TELEGRAM_BOT_TOKEN` | telegram_tool.py | Telegram Bot API token from `@BotFather` (enables two-way polling + `send_telegram`) |
 | `TELEGRAM_CHAT_ID` | telegram_tool.py | authorized numeric Telegram chat ID; messages from any other chat ID are ignored |
 | `STT_WS_URL` (+ `STT_TOKEN`) | main.py, voice_in.py | websocket speech-to-text server. Unset = `/voice` disabled |
+| `VEDIC_DIR` | config.py, mcp_client.py | folder of the vedic-astro-mcp repo. Fallback: sibling folder `../vedic-astro-mcp`. Never hardcode a user path [UNVERIFIED applied] |
 
 Note v1.1.0: `EMBED_BASE_URL` now also hosts OCR. Client builds OCR URL as `EMBED_BASE_URL.rstrip("/") + "/ocr"` then `/start` and `/<id>`. No separate OCR env var.
 Note v1.1.0: `BRAIN_LLM_NAME` must equal llama-server `--alias`. Notebook sets alias = HF repo id (or GGUF file stem for local paths) and prints the full `.env` block at the end of cell 8.
@@ -205,6 +214,9 @@ Privacy: first no-arg weather/places call sends your public IP to ip-api.com onc
 
 Required external binaries: `uv`, `uvx`, `npx`, `obscura`, `scrapling` (CLI with `mcp` subcommand).
 v1.3.0: no new env vars. New deps: `pyyaml`, `numpy`, `httpx`.
+
+Added v1.9.0: `config.py` `VEDIC_DIR = os.environ.get("VEDIC_DIR") or str(Path(__file__).parent.parent / "vedic-astro-mcp")`. New deps: `flask`, `httpx`.
+Privacy: birth date, time, lat, lon stay on the PC. Only the typed place name goes to Open-Meteo geocoding. The horoscope API (owner's own Vercel app) receives the Moon sign only.
 ---
 
 ## 5. Runtime flow
@@ -312,6 +324,8 @@ Change v1.7.0 (seen in uploaded agent.py/main.py):
 - RESEARCH_RE is the stricter variant, not the loose one.
 - REPL: added /voice, /voice on, /voice off, /forget, /loc here, /skill add, /skill remove (replace /skill-install, /skill-remove).
 - Telegram: PC and Telegram keep separate histories (messages vs tg_messages). Bridge is recall + memory.md only.
+
+Change v1.9.0: `connect_mcp` also spawns the `vedic` server (stdio). Astrology flow: user asks chart/dasha/horoscope -> LLM calls `collect_birth_details` (no args) -> `birth_form.collect_birth()` in `asyncio.to_thread`, opens browser form, blocks up to 300 s -> result kept in `astro_dispatch.birth_state` -> LLM calls `get_birth_chart` / `get_dasha` / `get_transits` / `get_horoscope` with no birth args -> `run_birth_tool` overwrites `date,time,lat,lon,tz` from `birth_state` -> MCP call. LLM never sees lat, lon or tz.
 ---
 
 ## 6. Tool registry
@@ -357,6 +371,7 @@ Defined in `tools_schema.py` (`TOOL_SCHEMAS`, OpenAI function format). Implement
 | `sun_times(location="", days=2)` | air_sun_tool (async, special-cased in `call_tool`) | offline `astral` calculation for sunrise, sunset, dawn, dusk, daylight duration, live countdown, and moon phase (`days` clamped 1–7). Empty location = saved location. |
 | `repo(action, url, name, command, timeout)` | repo_tool (async, special-cased) | actions clone, list, info, setup, run, remove. See 16.9. Schema and prompt lines seen in uploaded files. |
 | `export_doc(filename, format)` | export_tool (async, special-cased in `call_tool`, GATED) | converts workspace file (md html txt docx rst tex epub ipynb odt) to docx html epub odt txt via hidden pandoc MCP tool `convert-contents`. Output saved next to source, path derived from source, never LLM-chosen. Refuses overwrite. PDF not supported (needs TeX). Returns `DONE. saved X, N bytes in workspace.` |
+| `collect_birth_details()` | astro_dispatch (async, special-cased in `call_tool`) | no args. Flask form: date, time, place search, pick. Stores `birth_state`. Returns `{"ok": true, "place", "date", "time"}`. Timeout: `{"error": "user did not submit the form in time."}`. Telegram source: `error: birth form opens on the PC. Ask the user to use the terminal.` Schema in `tools_schema.py`. |
 
 
 ### MCP tools (registered at runtime in `mcp_client.py`)
@@ -368,6 +383,7 @@ Defined in `tools_schema.py` (`TOOL_SCHEMAS`, OpenAI function format). Implement
 - `search_papers`, `download_paper`, `list_papers` from `arxiv-mcp-server` (`uvx arxiv-mcp-server --storage-path str(WORKSPACE)`). `read_paper` deliberately NOT in `ALLOWED`: model sent `{}` in loop, output truncated. Hand-written schemas for `search_papers(query, max_results)` and `download_paper(paper_id)`.
 - `connect_mcp` (v1.8.0): skips auto-schema when a tool of the same name already exists in `TOOL_SCHEMAS`, so hand-written schema wins. `mcp_session[name]` still set, routing unchanged.
 - Rule (v1.8.0): every new MCP tool gets hand-written schema in `tools_schema.py` plus example in `EXAMPLES`. Auto schemas from MCP servers caused `{}` args on the 9B model (item 59).
+- `get_birth_chart`, `get_dasha`, `get_transits`, `get_horoscope` from `vedic-astro-mcp`. In `ALLOWED`. Auto schema, `date,time,lat,lon,tz` stripped in `connect_mcp`, so the LLM keeps only `as_of`. Routed through `run_birth_tool`, not the generic MCP path. Deviates from the v1.8.0 rule (hand-written schema + `EXAMPLES` entry) [UNVERIFIED applied].
 
 ### Confirmation gating (`tools.py: GATED`)
 `browser_click`, `browser_type`, `browser_fill_form`, `browser_press_key`, `remove_doc` → `ask("Confirm ...? [y/N]")`. `run_command` has its own prompt. `interrupt.ask()` sets a threading event so the Esc watcher doesn't steal keystrokes during the prompt.
@@ -388,6 +404,8 @@ Update v1.6.0: `send_telegram` added to async special cases before `LOCAL_TOOLS`
 Update v1.6.0: `air_quality` and `sun_times` added to async special cases before `LOCAL_TOOLS` in `call_tool`.
 
 Update v1.8.0: before the final `mcp_session[name]` line in `call_tool`: `download_paper` special-case (`download_paper_full`, pages whole paper, writes `arxiv_<id>.md`, indexes) [UNVERIFIED applied: key names]; `missing_args()` guard returns `error: missing [...]. Resend with real values, e.g. <EXAMPLES[name]>` [UNVERIFIED applied]. `EXAMPLES` dict in `tools.py` holds one valid JSON call per MCP tool [UNVERIFIED applied].
+
+Update v1.9.0: right after the GATED block, before `resolve-library-id`: `collect_birth_details` (tg guard first), then `name in BIRTH_TOOLS -> run_birth_tool`. Must stay above the generic `mcp_session[name]` fallback, or LLM args go through with no birth data.
 ---
 
 ## 7. Research pipeline (`research_tool.py`)
@@ -470,6 +488,11 @@ Update v1.8.0 (prompt lines added) [UNVERIFIED applied]:
 - Triage, first lines: docs/API/usage of ANY library, framework, SDK → `resolve-library-id` then `query-docs`, never `web_search`/`research`. Academic papers/arXiv/preprints → `search_papers` then `download_paper` then `read_doc`/`search_docs`. Both marked "Overrides cheapest-path rule".
 - Tool lines: `resolve-library-id(libraryName, query)`, `query-docs(libraryId, query)`, `search_papers(query)`, `download_paper(paper_id)` saves and indexes full paper as `arxiv_<id>.md`, never `ingest_doc`/`write_file` after it.
 - `web_search` and `research` descriptions in `tools_schema.py` now say: never for library docs or arXiv.
+
+Update v1.9.0 (prompt lines added) [UNVERIFIED applied]:
+- Tools: `collect_birth_details`, `get_birth_chart`, `get_dasha(as_of)`, `get_transits(as_of)`, `get_horoscope` (text = one source's reading, not fact).
+- Triage: kundli, lagna, rashi, nakshatra, dasha, transits, Sade Sati, horoscope -> collect_birth_details first if unknown, then the matching tool. Never web_search or research. Overrides cheapest-path rule.
+- Rules: use only returned fields, no invented yogas/aspects/dignities; computed fields are fact, horoscope text is one source; errors reported, never guess birth time or tz; traditional-system framing, not prediction; name the Moon sign, lagna and running dasha used.
 ---
 
 ## 10. Remote LLM and embedding server (Kaggle notebook)
@@ -530,6 +553,8 @@ Behavioral and code conventions the project follows. Keep them when adding featu
 12. A prompt rule is a request, a code guard is a fact. Anything that must always happen (forced `research`, delete approval) lives in `agent.py` / `tools.py`, prompt only repeats it.
 13. Tool count is a budget. Every added tool lowers wrong-tool and empty-args reliability of the 9B model. See Section 13 item 30 and roadmap (tool routing).
 14. Location-aware tools resolve place in one order: explicit arg → saved `location.json` → IP lookup (then saved).
+15. Values the LLM must not control (birth data, secrets, paths) are injected in code after the model call and overwrite model args. Strip them from the schema too. (v1.9.0, `astro_dispatch.run_birth_tool`.)
+16. Tools that need human input open a local-only form (127.0.0.1, random port, one-time token, 300 s timeout) and return a short ok/error string. The LLM never gets the raw input. Blocked for Telegram turns.
 
 ### Recipe: add a new tool
 1. Write function (sync returns `str`, or async and special-case in `call_tool`).
@@ -634,6 +659,18 @@ Ordered roughly by impact. Fix or acknowledge before piling on features.
 67. Skill router `sim` 0.41 to 0.55 for `frontend-design` on every docs query, once exactly at `SIM_MIN`. Router is noise for these tasks. Proposed `SIM_MIN` 0.65 (see item 36).
 68. +4 tools (`resolve-library-id`, `query-docs`, `search_papers`, `download_paper`), worsens item 30. Extra stdio servers add startup time (item 10); first `uvx arxiv-mcp-server` run downloads deps.
 69. `StdioServerParameters.args` rejects `Path`. `WORKSPACE` from `config` is `Path`, must be `str(WORKSPACE)`. **[FIXED in v1.8.0]**
+70. Astro math unverified. No golden test against Jagannatha Hora yet (lagna degree, graha signs, Moon nakshatra/pada, dasha dates). Only wiring tests pass (shape, DST error). Do not trust output until done.
+71. `mcp` client result attribute is `is_error`, not `isError`. `run_birth_tool` crashed with `AttributeError`. **[FIXED in v1.9.0]** (`getattr` on both names).
+72. `birth_state` is one global. Single user per run. A second `collect_birth_details` overwrites it. Not per Telegram chat.
+73. Esc during the form wait cancels the agent turn but the Flask thread lives until timeout (300 s). A new request opens a second form.
+74. `agent.py` applies `[:RESULT_CAP]` after `call_tool`. `get_dasha` and `get_birth_chart` JSON can exceed it, truncated JSON breaks parsing for the model. Cap value not checked. Proposed: `summary_only` flag in MCP, or trim output in MCP.
+75. Persona tail printed a made-up claim ("I could delete your Downloads folder. 47GB...") after two failed tool calls. No tool produced it. Related to item 65. Check `Sys_Prompt.txt`. Open.
+76. +5 tools (`collect_birth_details`, 4 astro). Worsens item 30.
+77. Personal data leak risk in public repos: hardcoded `VEDIC_DIR` with Windows username, own birth data in tests/README, git history, commit author email, tracebacks. Path moved to env [UNVERIFIED applied]. Git history not yet checked.
+78. Licence: `pyswisseph` is AGPL or paid commercial (see 16.10). Public vedic repo plus Ultron served on the internet means AGPL terms apply to the combined work. Earlier advice "MIT is fine" was wrong. Use AGPL-3.0 or buy the Swiss Ephemeris commercial licence. Open.
+79. `get_horoscope` depends on the owner's own Vercel API. If down, tool raises `horoscope API unavailable. try later.` `date.today()` in `horoscope.py` uses server tz. Cache never evicts.
+80. `get_dasha` / `get_transits` `as_of` before birth or after 120 years returns `current_maha: null`. Model must say no running period.
+81. Open-Meteo gives the current-era tz for a place. Pre-1970 India births may need a manual tz check. Not tested.
 
 ---
 
@@ -697,7 +734,8 @@ Compare to Section 3/6; list differences you found; then apply the procedure.
 | 1.6.0 | 2026-11-20 | Added `air_sun_tool.py` (`air_quality` via Open-Meteo CAMS, `sun_times` via `astral`), deps `astral`/`tzdata`, and known issue 50. | 3, 6, 9, 13, 15, 16.8 |
 | 1.7.0 | 2026-11-21 | Added repo tool (repo_tool.py) design, doc drift corrections (streaming, guards, REPL commands, voice_in), prompt audit, planned astro MCP project (16.10). Known issues 51-57. | 3, 4, 5, 6, 9, 13, 15, 16.9, 16.10, 17 |
 | 1.7.1 | 2026-11-22 | Added pandoc MCP (hidden `convert-contents`) wrapped by `export_tool.py` `export_doc`, workspace-locked, GATED. Fixed LOCAL_TOOLS async slip. Known issue 58. | 3, 4, 5, 6, 9, 13 |
-| 1.8.0 | 2026-11-23 | Added Context7 MCP (`resolve-library-id`, `query-docs`) and arXiv MCP (`search_papers`, `download_paper`, `list_papers`). Hand-written schemas for all MCP tools, schema dedupe in `connect_mcp`, `EXAMPLES` + `missing_args` hint. `download_paper_full` pager. Decided against memory MCP and Serena. Known issues 59-69. Guards and prompt lines marked `[UNVERIFIED applied]`. | 2, 6, 9, 11, 13, 15, 16.11, 17 |
+| 1.8.0 | 2026-11-23 | Added Context7 MCP (`resolve-library-id`, `query-docs`) and arXiv MCP (`search_papers`, `download_paper`, `list_papers`). Hand-written schemas for all MCP tools, schema dedupe in `connect_mcp`, `EXAMPLES` + `missing_args` hint. `download_paper_full` pager. Decided against memory MCP and Serena. Known issues 59-69. Guards and prompt lines marked. | 2, 6, 9, 11, 13, 15, 16.11, 17 |
+| 1.9.0 | 2026-11-26 | Built vedic astro MCP (separate repo) and wired it: `astro_dispatch.py`, `birth_form.py`, 4 MCP tools plus `collect_birth_details`, `VEDIC_DIR` env var, tg guard, prompt lines [UNVERIFIED applied]. 16.10 corrected from PLANNED. Known issues 70-81. | 2, 3, 4, 5, 6, 9, 11, 13, 15, 16.10, 16.12, 17 |
 
 <!-- APPEND NEW CHANGELOG ROWS ABOVE THIS LINE, KEEP TABLE FORMAT -->
 
@@ -805,15 +843,7 @@ File: repo_tool.py. repo(action, url="", name="", command="", timeout=300).
 - tools.py: ask() confirm for clone, setup, run, remove. Telegram turns auto-decline via ask().
 Limits: see Section 13 item 51.
 
-## 16.10 Astro MCP (PLANNED, nothing built)
-
-Separate project astro-mcp, own venv, installed or spawned by Ultron as a stdio MCP server (absolute venv python, args -m astro_mcp).
-- Layout: src/astro_mcp/{server,chart,geocode}.py, tests/test_chart.py.
-- Tools: find_birthplace(query) via Nominatim (1 req/s, UA required, cache); birth_chart(date, time, utc_offset, lat, lon) via pyswisseph, Lahiri sidereal, whole-sign houses, mean node.
-- Decision: VedAstro.Python not used. It calls a remote API, birth data leaves the PC, vendor not trusted. Use its docs only as a function-list spec.
-- Rules: stdout is protocol, never print (log to stderr); tools return facts only, LLM writes prose; no ascendant without birth time; entertainment label; validate against a known chart before trust.
-- Licence: pyswisseph is AGPL or paid commercial. Personal use ok.
-- Ideas not started: dasha tool; palm reader (MediaPipe Hands in browser, local only, entertainment); standalone geolocate tool (overlaps weather_tool.geocode, prefer reuse).
+## 16.10 Astro MCP ~~(PLANNED, nothing built)~~ → BUILT v1.9.0, see 16.12. Design below changed: geocode moved to Flask form (Open-Meteo, not Nominatim), `tz` required IANA name (not `utc_offset`), tools are `get_birth_chart`, `get_dasha`, `get_transits`, `get_horoscope` *(corrected v1.9.0)*
 
 ## 16.11 Context7 and arXiv MCP (v1.8.0)
 
@@ -834,6 +864,16 @@ Evaluated and rejected:
 - `oraios/serena` (symbol-level code navigation): ~20 tools overlapping `read_file`/`edit_file`/`run_command`, needs active project path, slow language-server startup, worsens item 30. Revisit only for navigating large cloned repos, read-only subset.
 
 Test prompts (run without naming tools): Next.js `await params` docs; "Find 3 recent arXiv papers on speculative decoding"; "Download arXiv paper 1706.03762 and summarize the conclusion section" (expect future-work content: other modalities, local attention, less sequential generation, not abstract BLEU numbers); fake library name (expect "not found"); `Latest news on OpenAI` (expect `web_search`, not `search_papers`).
+
+## 16.12 Vedic astro MCP and birth form (v1.9.0)
+
+Separate repo `vedic-astro-mcp` (FastMCP, stdio). Own venv via `uv`. Files: `main.py` (tools), `utilities/chart.py` (Swiss Ephemeris), `utilities/dasha.py` (Vimshottari), `utilities/enrich.py` (dignity, lords, nakshatra lord, aspects, navamsa), `utilities/timeutil.py` (local to UTC, raises `TimeError` on DST gap or fold), `utilities/horoscope.py` (owner's API wrapper).
+- Settings: Lahiri, whole-sign houses, mean node, Moshier ephemeris, dasha year = 365.25 days. Document if changed.
+- Tools (all take `date YYYY-MM-DD, time HH:MM local, lat, lon, tz IANA`): `get_birth_chart`, `get_dasha(as_of)`, `get_transits(as_of)`, `get_horoscope` (Moon sign derived in code, LLM never passes a sign). `tz` is required, MCP never guesses it.
+- Design rules: facts only, LLM writes prose; echo `input` (utc, tz) back so a wrong tz is visible; errors say what to ask the user; `get_horoscope` raises on API failure instead of returning null.
+- Ultron side: `birth_form.py` (Flask, token in URL, binds 127.0.0.1, 5-result Open-Meteo search, DST gap/fold and future-date check before submit) and `astro_dispatch.py` (see Section 5 flow).
+- Tests (in the vedic repo, `pytest` + `fastmcp.Client`): chart shape, DST gap error readable. Golden tests missing (item 70).
+- Test prompts: "what is my lagna" (expect form, then `get_birth_chart`); "which dasha am I running" (`get_dasha`); "research my vedic chart" (must still use `get_birth_chart`); "do I have Gajakesari yoga" (no yoga tool, must not invent); Telegram "what is my lagna" (expect tg error).
 ---
 
 ## 17. Roadmap / planned features (append only)
@@ -860,10 +900,17 @@ Test prompts (run without naming tools): Next.js `await params` docs; "Find 3 re
 - [ ] Code guards: save_memory only on MEM_RE, research->web_search remap, find_link vs repo
 - [ ] Telegram: to_thread read_you, MAX_AGE filter, tg_print, source tag on log lines
 - [ ] Print prompt/tool token estimate at startup
-- [ ] Build astro-mcp (16.10), then register in Ultron
+- [x] Build astro-mcp (16.10), then register in Ultron (v1.9.0)
 - [ ] Raise `SIM_MIN` to 0.65 after more `[skill] best=... sim=...` logs
 - [ ] Per-tool hand schema check at startup: print schema for each MCP tool, warn if no entry in `EXAMPLES`
 - [ ] Post-turn verifier in `agent.py`: block claims of "saved/logged/done" without matching `wrote:`/`indexed:`/`saved:` result
+- [ ] Astro golden tests vs Jagannatha Hora (3 charts: own, pre-1970 India, outside India) then remove [UNVERIFIED]
+- [ ] `summary_only` flag for `get_dasha` or trim output to fit `RESULT_CAP` (item 74)
+- [ ] Hand-written schemas + `EXAMPLES` entries for the 4 astro tools (match v1.8.0 rule)
+- [ ] Per-session `birth_state` (key by chat or source) instead of one global
+- [ ] Astro licence decision: AGPL-3.0 or Swiss Ephemeris commercial licence (item 78)
+- [ ] Astro next: pratyantar dasha, combustion, yogas, panchang, Ashtakavarga (only after golden tests)
+- [ ] Clean Sys_Prompt.txt persona tail so it cannot invent claims (items 65, 75)
 <!-- Mark done as `- [x] ... (vX.Y.Z)`, never delete items. -->
 
 ---
