@@ -22,3 +22,4 @@ websockets
 astral
 youtube-transcript-api
 umap-learn
+flask

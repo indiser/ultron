@@ -697,4 +697,17 @@ TOOL_SCHEMAS = [
             },
         },
     },
+    {
+        "type": "function", 
+        "function": {
+            "name": "collect_birth_details",
+            "description": "Open a form so the user enters birth date, time, and place. "
+                   "Call before any astrology tool if birth details are not known.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    }
 ]

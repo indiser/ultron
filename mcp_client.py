@@ -3,7 +3,8 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from tools_schema import TOOL_SCHEMAS
 import os
-from config import WORKSPACE
+from config import WORKSPACE, VEDIC_DIR
+
 
 NPX = "npx.cmd" if os.name == "nt" else "npx"
 
@@ -20,6 +21,7 @@ browser_state = {"mode": "headless"}
 
 # ARXIV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "workspace", "papers")
 
+
 MCP_SERVERS = {
     "time": StdioServerParameters(command="uvx", args = ["mcp-server-time"]),
     "scrapling": StdioServerParameters(command="scrapling", args=["mcp"]),
@@ -28,12 +30,16 @@ MCP_SERVERS = {
     "arxiv": StdioServerParameters(
     command="uvx",
     args=["arxiv-mcp-server", "--storage-path", str(WORKSPACE)]),
+    "vedic": StdioServerParameters(
+        command="uv",
+        args=["--directory", VEDIC_DIR, "run", "main.py"]),
 }
 
 mcp_session: dict[str, ClientSession] = {}
 
 ALLOWED = {"get_current_time", "make_request", "convert-contents", "resolve-library-id", "query-docs", "get-library-docs"}
 ALLOWED |= {"search_papers", "download_paper", "list_papers"}
+ALLOWED |= {"get_birth_chart", "get_dasha", "get_transits", "get_horoscope"}
 HIDDEN_TOOLS = {"make_request", "convert-contents"}
 BROWSER_ALLOWED = {"browser_navigate", "browser_snapshot", "browser_click",
                    "browser_type", "browser_fill_form", "browser_press_key",
@@ -99,6 +105,11 @@ async def connect_mcp(stack: AsyncExitStack):
             if any(t["function"]["name"] == tool.name for t in TOOL_SCHEMAS):
                 continue
             schema = clean_schema(getattr(tool, "inputSchema", None))
+            if tool.name in {"get_birth_chart", "get_dasha", "get_transits", "get_horoscope"}:
+                for k in ("date", "time", "lat", "lon", "tz"):
+                    schema["properties"].pop(k, None)
+                schema["required"] = [r for r in schema["required"]
+                                      if r not in ("date", "time", "lat", "lon", "tz")]
             TOOL_SCHEMAS.append(
                 {
                     "type": "function",

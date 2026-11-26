@@ -27,6 +27,8 @@ VENV = Path(__file__).parent / ".venv"
 LOCATION_FILE = Path(__file__).parent / "location.json"
 SCHEDULES_FILE = Path(__file__).parent / "schedules.json"  # or os.path.join(..., "schedules.json") matching your config.py style
 
+VEDIC_DIR = os.environ.get("VEDIC_DIR") or str(Path(__file__).parent.parent / "vedic-astro-mcp")
+
 EMBED_PATH = "BAAI/bge-small-en-v1.5"
 QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 

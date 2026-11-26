@@ -25,6 +25,7 @@ from telegram_tool import send_telegram, read_telegram
 from repo_tool import repo
 from text_ui import SOURCE
 from export_tool import export_doc
+from astro_dispatch import BIRTH_TOOLS, collect_birth_details, run_birth_tool
 import re
 import json
 
@@ -118,6 +119,12 @@ async def call_tool(name: str, args: dict) -> str:
         return await ingest_url(**args)
     if name == "ocr_image":
         return await ocr_image(**args)
+    if name == "collect_birth_details":
+        if SOURCE.get() == "tg":
+            return "error: birth form opens on the PC. Ask the user to use the terminal."
+        return await collect_birth_details()
+    if name in BIRTH_TOOLS:
+        return await run_birth_tool(name, args)
     if name in LOCAL_TOOLS:
         return LOCAL_TOOLS[name](**args)
     if name == "download_paper":
